@@ -1,12 +1,12 @@
 module Foglang.Core (Parser, isLetter) where
 
-import qualified Data.Char as Hidden.Data.Char (isLetter)
+import qualified Data.Char as Data.Char (isLetter)
 import qualified Data.Text as T
 import Data.Void (Void)
 import Text.Megaparsec (Parsec)
 
 type Parser = Parsec Void T.Text
 
--- letter includes underscore in go, hide the unsafe one from Data.Char
+-- Go's `letter` includes underscore, so we wrap Data.Char.isLetter
 isLetter :: Char -> Bool
-isLetter c = Hidden.Data.Char.isLetter c || c == '_'
+isLetter c = Data.Char.isLetter c || c == '_'

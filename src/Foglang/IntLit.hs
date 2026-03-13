@@ -31,7 +31,7 @@ isBinDigit c = c == '0' || c == '1'
 digitSeq :: (Char -> Bool) -> Parser T.Text
 digitSeq isD = do
   t <- takeWhile1P Nothing (\c -> isD c || c == '_')
-  if T.last t /= '_' && not ("__" `T.isInfixOf` t)
+  if isD (T.head t) && not ('_' == T.last t) && not ("__" `T.isInfixOf` t)
     then return t
     else fail "'_' must separate successive digits"
 
@@ -66,5 +66,8 @@ decimalLit =
     parseZero = Decimal <$> string "0"
     parseDigits = do
       first <- satisfy (\c -> c >= '1' && c <= '9')
-      rest <- option "" (digitSeq isDigit)
+      rest <- option "" $ do
+        sep <- option "" (string "_")
+        digits <- digitSeq isDigit
+        return $ sep <> digits
       return $ Decimal $ T.cons first rest
