@@ -25,7 +25,9 @@ source-repository head
 
 library
   exposed-modules:
-      Foglang
+      Foglang.Core
+      Foglang.Ident
+      Foglang.IntLit
   other-modules:
       Paths_foglang
   autogen-modules:
@@ -59,6 +61,8 @@ test-suite foglang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Foglang.IdentSpec
+      Foglang.IntLitSpec
       Paths_foglang
   autogen-modules:
       Paths_foglang
