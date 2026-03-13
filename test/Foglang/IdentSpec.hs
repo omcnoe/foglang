@@ -3,7 +3,6 @@
 module Foglang.IdentSpec (spec) where
 
 import Data.Either (isLeft)
-import qualified Data.Text as T
 import Foglang.Ident (ident)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
@@ -15,8 +14,7 @@ spec = do
           "_x9",
           "ThisVariableIsExported",
           "αβ"
-        ] ::
-          [T.Text]
+        ]
 
   let invalid =
         [ "123abc",

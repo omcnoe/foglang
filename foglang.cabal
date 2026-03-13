@@ -26,6 +26,7 @@ source-repository head
 library
   exposed-modules:
       Foglang.Core
+      Foglang.Expr
       Foglang.Ident
       Foglang.IntLit
   other-modules:
@@ -37,6 +38,7 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
   build-depends:
       base ==4.20.2.0
+    , containers ==0.7
     , megaparsec ==9.7.0
     , text ==2.1.3
   default-language: Haskell2010
@@ -52,6 +54,7 @@ executable fog
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base ==4.20.2.0
+    , containers ==0.7
     , foglang
     , megaparsec ==9.7.0
     , text ==2.1.3
@@ -61,6 +64,7 @@ test-suite foglang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Foglang.ExprSpec
       Foglang.IdentSpec
       Foglang.IntLitSpec
       Paths_foglang
@@ -71,6 +75,7 @@ test-suite foglang-test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base ==4.20.2.0
+    , containers ==0.7
     , foglang
     , hspec ==2.11.17
     , megaparsec ==9.7.0

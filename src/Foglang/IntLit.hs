@@ -1,10 +1,11 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Foglang.IntLit (IntLit (..), intLit) where
 
 import Data.Char (isDigit, isHexDigit, isOctDigit)
-import qualified Data.Text as T
-import Foglang.Core (Parser)
+import Data.Text qualified as T
+import Foglang.Core (Parser, lexeme)
 import Text.Megaparsec (option, satisfy, takeWhile1P, try, (<|>))
 import Text.Megaparsec.Char (string, string')
 
@@ -34,9 +35,6 @@ digitSeq isD = do
   if isD (T.head t) && not ('_' == T.last t) && not ("__" `T.isInfixOf` t)
     then return t
     else fail "'_' must separate successive digits"
-
-intLit :: Parser IntLit
-intLit = try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit
 
 binaryLit :: Parser IntLit
 binaryLit = do
@@ -71,3 +69,6 @@ decimalLit =
         digits <- digitSeq isDigit
         return $ sep <> digits
       return $ Decimal $ T.cons first rest
+
+intLit :: Parser IntLit
+intLit = lexeme $ try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit
