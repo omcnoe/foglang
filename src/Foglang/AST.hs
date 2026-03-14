@@ -1,6 +1,7 @@
 module Foglang.AST
   ( Ident (..),
     QualIdent (..),
+    unitIdent,
     IntLit (..),
     FloatLit (..),
     Expr (..),
@@ -21,6 +22,10 @@ data Ident = Ident T.Text
 -- TODO golang only allows one level of qualification package.name, do we have different requirements? Leave as is for now.
 data QualIdent = QualIdent [Ident]
   deriving (Eq, Show)
+
+-- TODO maybe QualIdent should be a sum type? Anyway it's not important right now.
+unitIdent :: QualIdent
+unitIdent = QualIdent [Ident "()"]
 
 instance IsString Ident where
   fromString = Ident . T.pack
@@ -54,10 +59,10 @@ newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
 data ImportAlias
-  = None        -- import qualified by package name
+  = None -- import qualified by package name
   | Alias Ident -- import qualified by alias
-  | Dot         -- import without qualifiers
-  | Blank       -- import for side effects only
+  | Dot -- import without qualifiers
+  | Blank -- import for side effects only
   deriving (Eq, Show)
 
 data ImportDecl = ImportDecl ImportAlias T.Text

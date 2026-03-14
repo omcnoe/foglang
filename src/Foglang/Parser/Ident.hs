@@ -3,9 +3,9 @@ module Foglang.Parser.Ident (ident, qualIdent) where
 import Data.Char (isDigit)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Foglang.AST (Ident (..), QualIdent (..))
+import Foglang.AST (Ident (..), QualIdent (..), unitIdent)
 import Foglang.Parser (Parser, isLetter, lexeme, symbol)
-import Text.Megaparsec (satisfy, sepBy1, takeWhileP, try)
+import Text.Megaparsec (satisfy, sepBy1, takeWhileP, try, (<|>))
 
 -- identifier = letter { letter | unicode_digit } .
 
@@ -53,6 +53,13 @@ ident = lexeme $ try $ do
     else return (Ident raw)
 
 qualIdent :: Parser QualIdent
-qualIdent = lexeme $ try $ do
-  parts <- ident `sepBy1` symbol "."
-  return (QualIdent parts)
+qualIdent =
+  unitIdent' <|> qualIdent'
+  where
+    unitIdent' = do
+      _ <- symbol "()"
+      return unitIdent
+    qualIdent' =
+      lexeme $ try $ do
+        parts <- ident `sepBy1` symbol "."
+        return (QualIdent parts)

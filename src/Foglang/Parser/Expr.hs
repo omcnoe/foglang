@@ -17,14 +17,14 @@ expr = makeExprParser atom operatorTable
         <|> try ifExpr
         <|> try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
+        <|> try (Var <$> qualIdent)
         <|> paren
-        <|> (Var <$> qualIdent)
 
     argAtom =
       try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
+        <|> try (Var <$> qualIdent)
         <|> paren
-        <|> (Var <$> qualIdent)
 
     paren = do
       _ <- symbol "("

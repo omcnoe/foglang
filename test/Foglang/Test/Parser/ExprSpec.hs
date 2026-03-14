@@ -100,8 +100,7 @@ spec = do
 
   let invalidParen =
         [ "(1",
-          "1)",
-          "()"
+          "1)"
         ]
 
   let validApplication =
