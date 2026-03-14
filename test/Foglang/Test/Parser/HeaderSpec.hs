@@ -1,7 +1,7 @@
 module Foglang.Test.Parser.HeaderSpec (spec) where
 
 import Data.Either (isLeft)
-import Foglang.AST (Header (..), ImportDecl (..), PackageDecl (..))
+import Foglang.AST (Header (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
 import Foglang.Parser.Header (header)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
@@ -12,13 +12,13 @@ spec = do
 
   describe "header" $ do
     it "parses package declaration with no imports" $
-      parseHeader "package main" `shouldBe` Right (Header (PackageDecl "main") [])
+      parseHeader "package main" `shouldBe` Right (Header (PackageClause "main") [])
 
     it "parses package with a single import" $
       parseHeader
         "package main\n\
         \import \"fmt\""
-        `shouldBe` Right (Header (PackageDecl "main") [ImportDecl Nothing "fmt"])
+        `shouldBe` Right (Header (PackageClause "main") [ImportDecl None "fmt"])
 
     it "parses package with multiple single imports" $
       parseHeader
@@ -27,8 +27,8 @@ spec = do
         \import \"os\""
         `shouldBe` Right
           ( Header
-              (PackageDecl "main")
-              [ImportDecl Nothing "fmt", ImportDecl Nothing "os"]
+              (PackageClause "main")
+              [ImportDecl None "fmt", ImportDecl None "os"]
           )
 
     it "parses package with a grouped import" $
@@ -37,8 +37,8 @@ spec = do
         \import (\"fmt\" \"os\")"
         `shouldBe` Right
           ( Header
-              (PackageDecl "main")
-              [ImportDecl Nothing "fmt", ImportDecl Nothing "os"]
+              (PackageClause "main")
+              [ImportDecl None "fmt", ImportDecl None "os"]
           )
 
     it "parses package with mixed single and grouped imports" $
@@ -48,8 +48,8 @@ spec = do
         \import (\"os\" \"strconv\")"
         `shouldBe` Right
           ( Header
-              (PackageDecl "main")
-              [ImportDecl Nothing "fmt", ImportDecl Nothing "os", ImportDecl Nothing "strconv"]
+              (PackageClause "main")
+              [ImportDecl None "fmt", ImportDecl None "os", ImportDecl None "strconv"]
           )
 
     it "parses grouped import with import paths on separate lines" $
@@ -61,15 +61,15 @@ spec = do
         \)"
         `shouldBe` Right
           ( Header
-              (PackageDecl "main")
-              [ImportDecl Nothing "fmt", ImportDecl Nothing "os"]
+              (PackageClause "main")
+              [ImportDecl None "fmt", ImportDecl None "os"]
           )
 
     it "parses package with an empty grouped import" $
       parseHeader
         "package main\n\
         \import ()"
-        `shouldBe` Right (Header (PackageDecl "main") [])
+        `shouldBe` Right (Header (PackageClause "main") [])
 
     it "rejects input missing package declaration" $
       parseHeader "import \"fmt\"" `shouldSatisfy` isLeft
@@ -81,4 +81,4 @@ spec = do
       parseHeader
         "package main\n\
         \import . \"fmt\""
-        `shouldBe` Right (Header (PackageDecl "main") [ImportDecl (Just ".") "fmt"])
+        `shouldBe` Right (Header (PackageClause "main") [ImportDecl Dot "fmt"])

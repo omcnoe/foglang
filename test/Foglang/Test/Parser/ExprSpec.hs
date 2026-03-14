@@ -23,37 +23,37 @@ spec = do
   let validBinaryOp =
         [ ("1 + 2", BinaryOp (IntLit (Decimal "1")) "+" (IntLit (Decimal "2"))),
           ("3.14 * 2.0", BinaryOp (FloatLit (DecimalFloat "3.14")) "*" (FloatLit (DecimalFloat "2.0"))),
-          ("x - y", BinaryOp (Ident "x") "-" (Ident "y")),
+          ("x - y", BinaryOp (Var "x") "-" (Var "y")),
           ( "1 + 2 * 3",
             BinaryOp
               (IntLit (Decimal "1"))
               "+"
               (BinaryOp (IntLit (Decimal "2")) "*" (IntLit (Decimal "3")))
           ),
-          ("a / b", BinaryOp (Ident "a") "/" (Ident "b")),
-          ("a % b", BinaryOp (Ident "a") "%" (Ident "b")),
-          ("a << b", BinaryOp (Ident "a") "<<" (Ident "b")),
-          ("a >> b", BinaryOp (Ident "a") ">>" (Ident "b")),
-          ("a & b", BinaryOp (Ident "a") "&" (Ident "b")),
-          ("a &^ b", BinaryOp (Ident "a") "&^" (Ident "b")),
-          ("a | b", BinaryOp (Ident "a") "|" (Ident "b")),
-          ("a ^ b", BinaryOp (Ident "a") "^" (Ident "b")),
-          ("a == b", BinaryOp (Ident "a") "==" (Ident "b")),
-          ("a != b", BinaryOp (Ident "a") "!=" (Ident "b")),
-          ("a < b", BinaryOp (Ident "a") "<" (Ident "b")),
-          ("a > b", BinaryOp (Ident "a") ">" (Ident "b")),
-          ("a <= b", BinaryOp (Ident "a") "<=" (Ident "b")),
-          ("a >= b", BinaryOp (Ident "a") ">=" (Ident "b")),
-          ("a && b", BinaryOp (Ident "a") "&&" (Ident "b")),
-          ("a || b", BinaryOp (Ident "a") "||" (Ident "b")),
+          ("a / b", BinaryOp (Var "a") "/" (Var "b")),
+          ("a % b", BinaryOp (Var "a") "%" (Var "b")),
+          ("a << b", BinaryOp (Var "a") "<<" (Var "b")),
+          ("a >> b", BinaryOp (Var "a") ">>" (Var "b")),
+          ("a & b", BinaryOp (Var "a") "&" (Var "b")),
+          ("a &^ b", BinaryOp (Var "a") "&^" (Var "b")),
+          ("a | b", BinaryOp (Var "a") "|" (Var "b")),
+          ("a ^ b", BinaryOp (Var "a") "^" (Var "b")),
+          ("a == b", BinaryOp (Var "a") "==" (Var "b")),
+          ("a != b", BinaryOp (Var "a") "!=" (Var "b")),
+          ("a < b", BinaryOp (Var "a") "<" (Var "b")),
+          ("a > b", BinaryOp (Var "a") ">" (Var "b")),
+          ("a <= b", BinaryOp (Var "a") "<=" (Var "b")),
+          ("a >= b", BinaryOp (Var "a") ">=" (Var "b")),
+          ("a && b", BinaryOp (Var "a") "&&" (Var "b")),
+          ("a || b", BinaryOp (Var "a") "||" (Var "b")),
           -- & (prec 5) tighter than && (prec 2)
-          ("a & b && c", BinaryOp (BinaryOp (Ident "a") "&" (Ident "b")) "&&" (Ident "c")),
+          ("a & b && c", BinaryOp (BinaryOp (Var "a") "&" (Var "b")) "&&" (Var "c")),
           -- \| (prec 4) tighter than && (prec 2)
-          ("a | b && c", BinaryOp (BinaryOp (Ident "a") "|" (Ident "b")) "&&" (Ident "c")),
+          ("a | b && c", BinaryOp (BinaryOp (Var "a") "|" (Var "b")) "&&" (Var "c")),
           -- == (prec 3) tighter than && (prec 2)
-          ("a == b && c", BinaryOp (BinaryOp (Ident "a") "==" (Ident "b")) "&&" (Ident "c")),
+          ("a == b && c", BinaryOp (BinaryOp (Var "a") "==" (Var "b")) "&&" (Var "c")),
           -- && (prec 2) tighter than || (prec 1)
-          ("a && b || c", BinaryOp (BinaryOp (Ident "a") "&&" (Ident "b")) "||" (Ident "c"))
+          ("a && b || c", BinaryOp (BinaryOp (Var "a") "&&" (Var "b")) "||" (Var "c"))
         ]
 
   let invalidBinaryOp =
@@ -66,14 +66,14 @@ spec = do
 
   let validIf =
         [ ( "if x then 1 else 2",
-            If (Ident "x") (IntLit (Decimal "1")) (IntLit (Decimal "2"))
+            If (Var "x") (IntLit (Decimal "1")) (IntLit (Decimal "2"))
           ),
           ( "if x then y else z",
-            If (Ident "x") (Ident "y") (Ident "z")
+            If (Var "x") (Var "y") (Var "z")
           ),
           ( "if x then 1 else 2 + 3",
             If
-              (Ident "x")
+              (Var "x")
               (IntLit (Decimal "1"))
               (BinaryOp (IntLit (Decimal "2")) "+" (IntLit (Decimal "3")))
           )
@@ -89,7 +89,7 @@ spec = do
 
   let validParen =
         [ ("(1)", IntLit (Decimal "1")),
-          ("(x)", Ident "x"),
+          ("(x)", Var "x"),
           ( "(1 + 2) * 3",
             BinaryOp
               (BinaryOp (IntLit (Decimal "1")) "+" (IntLit (Decimal "2")))
@@ -105,14 +105,14 @@ spec = do
         ]
 
   let validApplication =
-        [ ("f x", Application (Ident "f") [Ident "x"]),
-          ("f x y", Application (Ident "f") [Ident "x", Ident "y"]),
-          ("f 1 2", Application (Ident "f") [IntLit (Decimal "1"), IntLit (Decimal "2")]),
+        [ ("f x", Application (Var "f") [Var "x"]),
+          ("f x y", Application (Var "f") [Var "x", Var "y"]),
+          ("f 1 2", Application (Var "f") [IntLit (Decimal "1"), IntLit (Decimal "2")]),
           ( "f (x + 1)",
-            Application (Ident "f") [BinaryOp (Ident "x") "+" (IntLit (Decimal "1"))]
+            Application (Var "f") [BinaryOp (Var "x") "+" (IntLit (Decimal "1"))]
           ),
           ( "f x + y",
-            BinaryOp (Application (Ident "f") [Ident "x"]) "+" (Ident "y")
+            BinaryOp (Application (Var "f") [Var "x"]) "+" (Var "y")
           )
         ]
 

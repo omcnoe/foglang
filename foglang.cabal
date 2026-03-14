@@ -30,7 +30,7 @@ library
       Foglang.Parser
       Foglang.Parser.Expr
       Foglang.Parser.FloatLit
-      Foglang.Parser.GoFile
+      Foglang.Parser.FogFile
       Foglang.Parser.Header
       Foglang.Parser.Ident
       Foglang.Parser.IntLit

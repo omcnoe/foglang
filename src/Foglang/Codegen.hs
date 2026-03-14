@@ -1,10 +1,16 @@
 module Foglang.Codegen (codegen, codegenGoFile) where
 
 import Data.Text qualified as T
-import Foglang.AST (Expr (..), FloatLit (..), GoFile (..), Header (..), Ident, ImportDecl (..), IntLit (..), PackageDecl (..))
+import Foglang.AST (Expr (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), PackageClause (..), QualIdent (..))
 
 ind :: Int -> T.Text
 ind n = T.replicate n "\t"
+
+identText :: Ident -> T.Text
+identText (Ident t) = t
+
+qualIdentText :: QualIdent -> T.Text
+qualIdentText (QualIdent parts) = T.intercalate "." (map identText parts)
 
 intLitText :: IntLit -> T.Text
 intLitText (Decimal t) = t
@@ -51,19 +57,19 @@ genBody indent e = ind indent <> "return " <> genExpr e <> "\n"
 genFunc :: Ident -> [Ident] -> Expr -> T.Text
 genFunc name params body =
   "func "
-    <> name
+    <> identText name
     <> "("
     <> paramList
     <> ") any {\n"
     <> genBody 1 body
     <> "}\n"
   where
-    paramList = T.intercalate ", " (map (<> " any") params)
+    paramList = T.intercalate ", " (map ((<> " any") . identText) params)
 
 -- Generate a Go expression. BinaryOp sub-expressions are parenthesised to
 -- preserve foglang's precedences without relying on Go's
 genExpr :: Expr -> T.Text
-genExpr (Ident i) = i
+genExpr (Var qi) = qualIdentText qi
 genExpr (IntLit lit) = intLitText lit
 genExpr (FloatLit lit) = floatLitText lit
 genExpr (BinaryOp e1 op e2) = "(" <> genExpr e1 <> " " <> op <> " " <> genExpr e2 <> ")"
@@ -71,24 +77,26 @@ genExpr (Application f args) = genExpr f <> "(" <> T.intercalate ", " (map genEx
 genExpr (If cond then' else') =
   "func() any { if " <> genExpr cond <> " { return " <> genExpr then' <> " }; return " <> genExpr else' <> " }()"
 genExpr (Let name [] body) =
-  "func() any { " <> name <> " := " <> genExpr body <> "; return " <> name <> " }()"
+  "func() any { " <> identText name <> " := " <> genExpr body <> "; return " <> identText name <> " }()"
 genExpr (Let name params body) = genFunc name params body
 
 codegenImport :: ImportDecl -> T.Text
-codegenImport (ImportDecl Nothing path) = "import \"" <> path <> "\"\n"
-codegenImport (ImportDecl (Just alias) path) = "import " <> alias <> " \"" <> path <> "\"\n"
+codegenImport (ImportDecl None path) = "import \"" <> path <> "\"\n"
+codegenImport (ImportDecl Dot path) = "import . \"" <> path <> "\"\n"
+codegenImport (ImportDecl Blank path) = "import _ \"" <> path <> "\"\n"
+codegenImport (ImportDecl (Alias i) path) = "import " <> identText i <> " \"" <> path <> "\"\n"
 
 codegenHeader :: Header -> T.Text
-codegenHeader (Header (PackageDecl pkg) []) = "package " <> pkg <> "\n\n"
-codegenHeader (Header (PackageDecl pkg) imports) =
+codegenHeader (Header (PackageClause pkg) []) = "package " <> identText pkg <> "\n\n"
+codegenHeader (Header (PackageClause pkg) imports) =
   "package "
-    <> pkg
+    <> identText pkg
     <> "\n\n"
     <> T.concat (map codegenImport imports)
     <> "\n"
 
 codegenDecl :: Expr -> T.Text
-codegenDecl (Let name [] body) = "var " <> name <> " = " <> genExpr body <> "\n"
+codegenDecl (Let name [] body) = "var " <> identText name <> " = " <> genExpr body <> "\n"
 codegenDecl (Let name params body) = genFunc name params body
 codegenDecl e = genExpr e <> "\n"
 
@@ -97,9 +105,9 @@ header = "package main\n\n"
 
 -- Generate a Go top-level declaration from a foglang expression
 codegen :: Expr -> T.Text
-codegen (Let name [] body) = header <> "var " <> name <> " = " <> genExpr body <> "\n"
+codegen (Let name [] body) = header <> "var " <> identText name <> " = " <> genExpr body <> "\n"
 codegen (Let name params body) = header <> genFunc name params body
 codegen e = header <> genExpr e <> "\n"
 
-codegenGoFile :: GoFile -> T.Text
-codegenGoFile (GoFile hdr exprs) = codegenHeader hdr <> T.concat (map codegenDecl exprs)
+codegenGoFile :: FogFile -> T.Text
+codegenGoFile (FogFile hdr exprs) = codegenHeader hdr <> T.concat (map codegenDecl exprs)

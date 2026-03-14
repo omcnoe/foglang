@@ -1,6 +1,7 @@
 module Foglang.Test.Parser.IdentSpec (spec) where
 
 import Data.Either (isLeft)
+import Foglang.AST (Ident (..))
 import Foglang.Parser.Ident (ident)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
@@ -25,7 +26,7 @@ spec = do
 
   describe "ident" $ do
     it "parses valid identifiers" $
-      mapM_ (\s -> parseIdent s `shouldBe` Right s) valid
+      mapM_ (\s -> parseIdent s `shouldBe` Right (Ident s)) valid
 
     it "rejects invalid identifiers" $
       mapM_ (\s -> parseIdent s `shouldSatisfy` isLeft) invalid

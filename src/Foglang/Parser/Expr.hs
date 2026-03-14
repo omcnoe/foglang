@@ -5,7 +5,7 @@ import Data.Text qualified as T
 import Foglang.AST (Expr (..))
 import Foglang.Parser (Parser, keyword, lexeme, symbol)
 import Foglang.Parser.FloatLit (floatLit)
-import Foglang.Parser.Ident (ident)
+import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Text.Megaparsec (chunk, many, notFollowedBy, some, try, (<|>))
 
@@ -18,13 +18,13 @@ expr = makeExprParser atom operatorTable
         <|> try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
         <|> paren
-        <|> (Ident <$> ident)
+        <|> (Var <$> qualIdent)
 
     argAtom =
       try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
         <|> paren
-        <|> (Ident <$> ident)
+        <|> (Var <$> qualIdent)
 
     paren = do
       _ <- symbol "("

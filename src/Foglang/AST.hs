@@ -1,27 +1,47 @@
 module Foglang.AST
-  ( Ident,
+  ( Ident (..),
+    QualIdent (..),
     IntLit (..),
     FloatLit (..),
     Expr (..),
-    PackageDecl (..),
+    PackageClause (..),
+    ImportAlias (..),
     ImportDecl (..),
     Header (..),
-    GoFile (..),
+    FogFile (..),
   )
 where
 
+import Data.String (IsString (..))
 import Data.Text qualified as T
 
-type Ident = T.Text
-
-data IntLit = Decimal T.Text | Binary T.Text | Octal T.Text | Hex T.Text
+data Ident = Ident T.Text
   deriving (Eq, Show)
 
-data FloatLit = DecimalFloat T.Text | HexFloat T.Text
+-- TODO golang only allows one level of qualification package.name, do we have different requirements? Leave as is for now.
+data QualIdent = QualIdent [Ident]
+  deriving (Eq, Show)
+
+instance IsString Ident where
+  fromString = Ident . T.pack
+
+instance IsString QualIdent where
+  fromString = QualIdent . map Ident . T.splitOn "." . T.pack
+
+data IntLit
+  = Decimal T.Text
+  | Binary T.Text
+  | Octal T.Text
+  | Hex T.Text
+  deriving (Eq, Show)
+
+data FloatLit
+  = DecimalFloat T.Text
+  | HexFloat T.Text
   deriving (Eq, Show)
 
 data Expr
-  = Ident Ident
+  = Var QualIdent
   | IntLit IntLit
   | FloatLit FloatLit
   | Let Ident [Ident] Expr
@@ -30,19 +50,23 @@ data Expr
   | Application Expr [Expr]
   deriving (Eq, Show)
 
-newtype PackageDecl = PackageDecl Ident
+newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
--- The optional Text is the import alias: Nothing = normal, Just "." = dot import,
--- Just "_" = blank import, Just name = named alias.
--- TODO consider replacing this with discriminated union
-data ImportDecl = ImportDecl (Maybe T.Text) T.Text
+data ImportAlias
+  = None        -- import qualified by package name
+  | Alias Ident -- import qualified by alias
+  | Dot         -- import without qualifiers
+  | Blank       -- import for side effects only
   deriving (Eq, Show)
 
-data Header = Header PackageDecl [ImportDecl]
+data ImportDecl = ImportDecl ImportAlias T.Text
+  deriving (Eq, Show)
+
+data Header = Header PackageClause [ImportDecl]
   deriving (Eq, Show)
 
 -- TODO proper design for package/module/namespace system, and how that interacts with Go's package system.
 -- For now we just generate a single Go file with a single package.
-data GoFile = GoFile Header [Expr]
+data FogFile = FogFile Header [Expr]
   deriving (Eq, Show)
