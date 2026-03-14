@@ -26,9 +26,12 @@ source-repository head
 library
   exposed-modules:
       Foglang.AST
+      Foglang.Codegen
       Foglang.Parser
       Foglang.Parser.Expr
       Foglang.Parser.FloatLit
+      Foglang.Parser.GoFile
+      Foglang.Parser.Header
       Foglang.Parser.Ident
       Foglang.Parser.IntLit
   other-modules:
@@ -71,10 +74,12 @@ test-suite foglang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Foglang.ExprSpec
-      Foglang.FloatLitSpec
-      Foglang.IdentSpec
-      Foglang.IntLitSpec
+      Foglang.Test.Cases.LeapYearSpec
+      Foglang.Test.Parser.ExprSpec
+      Foglang.Test.Parser.FloatLitSpec
+      Foglang.Test.Parser.HeaderSpec
+      Foglang.Test.Parser.IdentSpec
+      Foglang.Test.Parser.IntLitSpec
       Paths_foglang
   autogen-modules:
       Paths_foglang
@@ -83,10 +88,12 @@ test-suite foglang-test
   default-extensions:
       ImportQualifiedPost
       OverloadedStrings
+      TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base ==4.20.2.0
     , containers ==0.7
+    , file-embed ==0.0.16.0
     , foglang
     , hspec ==2.11.17
     , megaparsec ==9.7.0

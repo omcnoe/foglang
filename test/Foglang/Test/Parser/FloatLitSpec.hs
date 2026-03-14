@@ -1,4 +1,4 @@
-module Foglang.FloatLitSpec (spec) where
+module Foglang.Test.Parser.FloatLitSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (FloatLit (..))

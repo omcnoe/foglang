@@ -21,9 +21,6 @@ hex_mantissa      = [ "_" ] hex_digits "." [ hex_digits ] |
 hex_exponent      = ( "p" | "P" ) [ "+" | "-" ] decimal_digits .
 -}
 
-floatLit :: Parser FloatLit
-floatLit = lexeme $ try hexFloatLit <|> decimalFloatLit
-
 decimalFloatLit :: Parser FloatLit
 decimalFloatLit = try withDot <|> try digitsExp <|> dotFirst
   where
@@ -80,3 +77,6 @@ hexFloatLit = do
       _ <- string "."
       digits <- hexDigits
       return $ "." <> digits
+
+floatLit :: Parser FloatLit
+floatLit = lexeme $ try hexFloatLit <|> decimalFloatLit

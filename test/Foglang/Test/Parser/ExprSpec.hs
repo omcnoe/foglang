@@ -1,4 +1,4 @@
-module Foglang.ExprSpec (spec) where
+module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Expr (..), FloatLit (..), IntLit (..))
@@ -29,13 +29,39 @@ spec = do
               (IntLit (Decimal "1"))
               "+"
               (BinaryOp (IntLit (Decimal "2")) "*" (IntLit (Decimal "3")))
-          )
+          ),
+          ("a / b", BinaryOp (Ident "a") "/" (Ident "b")),
+          ("a % b", BinaryOp (Ident "a") "%" (Ident "b")),
+          ("a << b", BinaryOp (Ident "a") "<<" (Ident "b")),
+          ("a >> b", BinaryOp (Ident "a") ">>" (Ident "b")),
+          ("a & b", BinaryOp (Ident "a") "&" (Ident "b")),
+          ("a &^ b", BinaryOp (Ident "a") "&^" (Ident "b")),
+          ("a | b", BinaryOp (Ident "a") "|" (Ident "b")),
+          ("a ^ b", BinaryOp (Ident "a") "^" (Ident "b")),
+          ("a == b", BinaryOp (Ident "a") "==" (Ident "b")),
+          ("a != b", BinaryOp (Ident "a") "!=" (Ident "b")),
+          ("a < b", BinaryOp (Ident "a") "<" (Ident "b")),
+          ("a > b", BinaryOp (Ident "a") ">" (Ident "b")),
+          ("a <= b", BinaryOp (Ident "a") "<=" (Ident "b")),
+          ("a >= b", BinaryOp (Ident "a") ">=" (Ident "b")),
+          ("a && b", BinaryOp (Ident "a") "&&" (Ident "b")),
+          ("a || b", BinaryOp (Ident "a") "||" (Ident "b")),
+          -- & (prec 5) tighter than && (prec 2)
+          ("a & b && c", BinaryOp (BinaryOp (Ident "a") "&" (Ident "b")) "&&" (Ident "c")),
+          -- \| (prec 4) tighter than && (prec 2)
+          ("a | b && c", BinaryOp (BinaryOp (Ident "a") "|" (Ident "b")) "&&" (Ident "c")),
+          -- == (prec 3) tighter than && (prec 2)
+          ("a == b && c", BinaryOp (BinaryOp (Ident "a") "==" (Ident "b")) "&&" (Ident "c")),
+          -- && (prec 2) tighter than || (prec 1)
+          ("a && b || c", BinaryOp (BinaryOp (Ident "a") "&&" (Ident "b")) "||" (Ident "c"))
         ]
 
   let invalidBinaryOp =
-        [ "1 +",
-          "+ 1",
-          "1 + + 2"
+        [ "a +",
+          "+ b",
+          "a + + b",
+          "a & & b",
+          "a | | b"
         ]
 
   let validIf =
@@ -104,10 +130,10 @@ spec = do
     it "rejects invalid let expressions" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidLet
 
-    it "parses valid infix expressions" $
+    it "parses valid binary op expressions" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validBinaryOp
 
-    it "rejects invalid infix expressions" $
+    it "rejects invalid binary op expressions" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidBinaryOp
 
     it "parses valid if expressions" $

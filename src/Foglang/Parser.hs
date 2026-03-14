@@ -1,10 +1,10 @@
-module Foglang.Parser (Parser, isLetter, keyword, lexeme, symbol, digitSeq, binaryDigits, octalDigits, decimalDigits, hexDigits) where
+module Foglang.Parser (Parser, isLetter, lexeme, symbol, keyword, digitSeq, decimalDigits, binaryDigits, octalDigits, hexDigits) where
 
 import Data.Char (isDigit, isHexDigit, isOctDigit)
 import Data.Char qualified as Data.Char
 import Data.Text qualified as T
 import Data.Void (Void)
-import Text.Megaparsec (Parsec, chunk, notFollowedBy, satisfy, takeWhile1P)
+import Text.Megaparsec (Parsec, chunk, notFollowedBy, satisfy, takeWhile1P, try)
 import Text.Megaparsec.Char (space1)
 import Text.Megaparsec.Char.Lexer qualified as L
 
@@ -14,21 +14,21 @@ type Parser = Parsec Void T.Text
 isLetter :: Char -> Bool
 isLetter c = Data.Char.isLetter c || c == '_'
 
-sc :: Parser ()
-sc =
+spaceconsumer :: Parser ()
+spaceconsumer =
   L.space
     space1
     (L.skipLineComment "//")
     (L.skipBlockComment "/*" "*/")
 
 lexeme :: Parser a -> Parser a
-lexeme = L.lexeme sc
+lexeme parser = L.lexeme spaceconsumer parser
 
 symbol :: T.Text -> Parser T.Text
-symbol = L.symbol sc
+symbol s = L.symbol spaceconsumer s
 
 keyword :: T.Text -> Parser T.Text
-keyword kw = lexeme $ do
+keyword kw = lexeme $ try $ do
   t <- chunk kw
   notFollowedBy (satisfy (\c -> isLetter c || isDigit c)) -- disambiguate from identifiers that may have keyword as prefix
   return t

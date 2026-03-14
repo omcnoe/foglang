@@ -14,9 +14,6 @@ octal_lit      = "0" [ "o" | "O" ] [ "_" ] octal_digits .
 hex_lit        = "0" ( "x" | "X" ) [ "_" ] hex_digits .
 -}
 
-intLit :: Parser IntLit
-intLit = lexeme $ try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit
-
 decimalLit :: Parser IntLit
 decimalLit =
   parseZero <|> parseDigits
@@ -50,3 +47,6 @@ hexLit = do
   sep <- option "" (string "_")
   digits <- hexDigits
   return $ Hex $ prefix <> sep <> digits
+
+intLit :: Parser IntLit
+intLit = lexeme $ try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit

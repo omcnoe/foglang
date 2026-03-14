@@ -64,7 +64,9 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - foglang
-    - hspec == 2.11.17
+    - file-embed == 0.0.16.0
+    - hspec      == 2.11.17
     default-extensions:
     - ImportQualifiedPost
     - OverloadedStrings
+    - TemplateHaskell

@@ -1,13 +1,13 @@
 module Foglang.Parser.Expr (expr) where
 
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
-import Data.Text (Text)
+import Data.Text qualified as T
 import Foglang.AST (Expr (..))
-import Foglang.Parser (Parser, keyword, symbol)
+import Foglang.Parser (Parser, keyword, lexeme, symbol)
 import Foglang.Parser.FloatLit (floatLit)
 import Foglang.Parser.Ident (ident)
 import Foglang.Parser.IntLit (intLit)
-import Text.Megaparsec (many, some, try, (<|>))
+import Text.Megaparsec (chunk, many, notFollowedBy, some, try, (<|>))
 
 expr :: Parser Expr
 expr = makeExprParser atom operatorTable
@@ -49,10 +49,18 @@ expr = makeExprParser atom operatorTable
       elseBranch <- expr
       return (If cond thenBranch elseBranch)
 
-    binaryOpExpr :: Text -> Operator Parser Expr
-    binaryOpExpr s = InfixL $ do
-      _ <- symbol s
-      return (\e1 e2 -> BinaryOp e1 s e2)
+    binaryOpExpr :: T.Text -> Operator Parser Expr
+    binaryOpExpr op = InfixL $ lexeme $ do
+      _ <- chunk op
+      return (\e1 e2 -> BinaryOp e1 op e2)
+
+    -- Like binaryOpExpr, but fails (without consuming) if followed by the given
+    -- char. Used to disambiguate operators sharing a prefix: & vs &&, | vs ||.
+    binaryOpExprNotFollowedBy :: T.Text -> T.Text -> Operator Parser Expr
+    binaryOpExprNotFollowedBy op notFollowedBy' = InfixL $ try $ lexeme $ do
+      _ <- chunk op
+      notFollowedBy (chunk notFollowedBy')
+      return (\e1 e2 -> BinaryOp e1 op e2)
 
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
@@ -62,6 +70,9 @@ expr = makeExprParser atom operatorTable
     operatorTable :: [[Operator Parser Expr]]
     operatorTable =
       [ [applicationExpr],
-        [binaryOpExpr "*", binaryOpExpr "/"],
-        [binaryOpExpr "+", binaryOpExpr "-"]
+        [binaryOpExpr "*", binaryOpExpr "/", binaryOpExpr "%", binaryOpExpr "<<", binaryOpExpr ">>", binaryOpExpr "&^", binaryOpExprNotFollowedBy "&" "&"],
+        [binaryOpExpr "+", binaryOpExpr "-", binaryOpExprNotFollowedBy "|" "|", binaryOpExpr "^"],
+        [binaryOpExpr "==", binaryOpExpr "!=", binaryOpExpr ">=", binaryOpExpr ">", binaryOpExpr "<=", binaryOpExpr "<"],
+        [binaryOpExpr "&&"],
+        [binaryOpExpr "||"]
       ]

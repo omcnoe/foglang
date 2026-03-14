@@ -1,4 +1,4 @@
-module Foglang.IntLitSpec (spec) where
+module Foglang.Test.Parser.IntLitSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (IntLit (..))

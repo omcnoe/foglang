@@ -1,4 +1,4 @@
-module Foglang.IdentSpec (spec) where
+module Foglang.Test.Parser.IdentSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.Parser.Ident (ident)
