@@ -1,9 +1,8 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Foglang.IntLitSpec (spec) where
 
 import Data.Either (isLeft)
-import Foglang.IntLit (IntLit (..), intLit)
+import Foglang.AST (IntLit (..))
+import Foglang.Parser.IntLit (intLit)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
 
@@ -33,9 +32,9 @@ spec = do
         ]
 
   let specInvalid =
-        [ "_42", -- an identifier, not an integer literal
-          "42_", -- invalid: _ must separate successive digits
-          "4__2", -- invalid: only one _ at a time
+        [ "_42", --       an identifier, not an integer literal
+          "42_", --       invalid: _ must separate successive digits
+          "4__2", --      invalid: only one _ at a time
           "0_xBadFace" -- invalid: _ must separate successive digits
         ]
 

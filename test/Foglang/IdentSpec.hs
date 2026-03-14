@@ -1,9 +1,7 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Foglang.IdentSpec (spec) where
 
 import Data.Either (isLeft)
-import Foglang.Ident (ident)
+import Foglang.Parser.Ident (ident)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
 
