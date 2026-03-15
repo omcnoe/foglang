@@ -41,10 +41,11 @@ data Expr
   | IntLit IntLit
   | FloatLit FloatLit
   | StrLit StringLit
-  | Let Ident [Ident] Expr
+  | Let Ident [Ident] Expr Expr
   | If Expr Expr Expr
   | BinaryOp Expr T.Text Expr
   | Application Expr [Expr]
+  | Sequence [Expr]
   deriving (Eq, Show)
 
 newtype PackageClause = PackageClause Ident
@@ -53,7 +54,7 @@ newtype PackageClause = PackageClause Ident
 data ImportAlias
   = None -- import qualified by package name
   | Alias Ident -- import qualified by alias
-  | Dot -- import without qualifiers
+  | Dot -- import without qualifiers (dangerous)
   | Blank -- import for side effects only
   deriving (Eq, Show)
 
@@ -65,5 +66,5 @@ data Header = Header PackageClause [ImportDecl]
 
 -- TODO proper design for package/module/namespace system, and how that interacts with Go's package system.
 -- For now we just generate a single Go file with a single package.
-data FogFile = FogFile Header [Expr]
+data FogFile = FogFile Header Expr
   deriving (Eq, Show)

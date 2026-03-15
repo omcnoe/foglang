@@ -41,9 +41,10 @@ spec = do
 
   let parseFloatLit s = parse (floatLit <* eof) "FloatLitSpec.hs" s
 
-  describe "floatLit" $ do
-    it "parses go spec examples" $
+  describe "floatLit parses" $ do
+    it "go spec examples" $
       mapM_ (\(s, con) -> parseFloatLit s `shouldBe` Right (con s)) specValid
 
-    it "rejects go spec invalid examples" $
+  describe "floatLit rejects" $
+    it "go spec invalid examples" $
       mapM_ (\s -> parseFloatLit s `shouldSatisfy` isLeft) specInvalid

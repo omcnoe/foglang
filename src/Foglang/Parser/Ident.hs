@@ -1,10 +1,10 @@
-module Foglang.Parser.Ident (ident, qualIdent, headerIdent) where
+module Foglang.Parser.Ident (identRaw, ident, qualIdent, headerIdent) where
 
 import Data.Char (isDigit)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foglang.AST (Ident (..))
-import Foglang.Parser (Parser, isLetter, lexeme, symbol)
+import Foglang.Parser (Parser, isGoLetter, lexeme, symbol)
 import Text.Megaparsec (satisfy, sepBy1, takeWhileP, try, (<|>))
 import Text.Megaparsec.Char (char)
 
@@ -46,8 +46,8 @@ reserved =
 -- Raw, no qualification or unit handling. No trailing whitespace consumed.
 identRaw :: Parser Ident
 identRaw = try $ do
-  c <- satisfy isLetter
-  cs <- takeWhileP Nothing (\ch -> isLetter ch || isDigit ch)
+  c <- satisfy isGoLetter
+  cs <- takeWhileP Nothing (\ch -> isGoLetter ch || isDigit ch)
   let raw = c `T.cons` cs
   if raw `Set.member` reserved
     then fail $ T.unpack $ "reserved keyword: " <> raw

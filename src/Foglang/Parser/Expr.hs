@@ -1,67 +1,131 @@
-module Foglang.Parser.Expr (expr) where
+module Foglang.Parser.Expr (exprBlock) where
 
+import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Expr (..))
-import Foglang.Parser (Parser, keyword, lexeme, symbol)
+import Foglang.AST (Expr (..), Ident (..))
+import Foglang.Parser (Parser, SC, keyword, lexeme, scn, symbol)
 import Foglang.Parser.FloatLit (floatLit)
-import Foglang.Parser.Ident (ident, qualIdent)
+import Foglang.Parser.Ident (ident, identRaw)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
-import Text.Megaparsec (many, notFollowedBy, some, try, (<|>))
-import Text.Megaparsec.Char (string)
+import Text.Megaparsec (Pos, many, notFollowedBy, sepBy1, some, try, (<|>))
+import Text.Megaparsec.Char (char, string)
+import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard, indentLevel, lineFold)
 
-expr :: Parser Expr
-expr = makeExprParser atom operatorTable
+-- Entrypoint for all expression parsing, parses a block of one or more expressions.
+exprBlock :: Parser Expr
+exprBlock = do
+  refPos <- indentLevel
+  e <- exprBlockItem refPos
+  es <- many (try $ indentGuard scn EQ refPos *> exprBlockItem refPos)
+  _ <- scn
+  return $ case (e : es) of
+    [x] -> x
+    xs -> Sequence xs
+
+-- An expression block item is either:
+-- a let binding (which absorbs any subsequent indented expression block)
+-- a line-folded expression
+exprBlockItem :: Pos -> Parser Expr
+exprBlockItem refPos = try (letExpr refPos) <|> lineFoldExpr refPos
+
+-- A line folded expression: parsed as a single logical line that may span
+-- multiple physical lines via indentation (line folding).
+lineFoldExpr :: Pos -> Parser Expr
+lineFoldExpr refPos = lineFold scn (\sc' -> exprWith sc' refPos)
+
+letExpr :: Pos -> Parser Expr
+letExpr refPos = do
+  _ <- lexeme (keyword "let")
+  i <- lexeme identRaw
+  p <- many ident -- ident handles "()" unit param
+  _ <- symbol "="
+  rhs <- exprBlock
+  inExprs <- many (try $ indentGuard scn EQ refPos *> exprBlockItem refPos)
+  -- Sequence [] as the empty inExpr terminal; extractTopLevel handles it cleanly.
+  let inExpr = case inExprs of
+        [] -> Sequence []
+        [x] -> x
+        xs -> Sequence xs
+  return $ Let i p rhs inExpr
+
+-- Expression parser parameterised on a space consumer and a block reference
+-- position. sc' controls how far whitespace is consumed between tokens.
+-- blockRefPos is the enclosing block's indentation column, used to validate
+-- that 'else' keywords are not outdented past the block boundary.
+exprWith :: SC -> Pos -> Parser Expr
+exprWith sc' blockRefPos = makeExprParser atom operatorTable
   where
+    -- Indentation aware versions of lexeme/symbol/keyword
+    lexeme' :: Parser a -> Parser a
+    lexeme' p = p <* (try sc' <|> pure ())
+
+    symbol' :: T.Text -> Parser T.Text
+    symbol' s = lexeme' (string s)
+
+    keyword' :: T.Text -> Parser T.Text
+    keyword' w = lexeme' (keyword w)
+
+    -- Skip newlines then assert current column >= minCol.
+    -- Used by ifExpr to validate that then/else are not outdented relative
+    -- to the if keyword.
+    atLeast :: Pos -> Parser ()
+    atLeast minCol = do
+      scn
+      col <- indentLevel
+      when (col < minCol) $ incorrectIndent EQ minCol col
+
+    -- Raw qualified identifier (no trailing whitespace); wrapped by lexeme' below.
+    qualIdentRaw :: Parser Ident
+    qualIdentRaw = try $ do
+      parts <- identRaw `sepBy1` char '.'
+      return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) parts
+
+    atom :: Parser Expr
     atom =
-      try letExpr
-        <|> try ifExpr
-        <|> try (FloatLit <$> floatLit)
-        <|> try (IntLit <$> intLit)
-        <|> try (StrLit <$> stringLit)
-        <|> try (Var <$> qualIdent)
+      try ifExpr
+        <|> try (FloatLit <$> lexeme' floatLit)
+        <|> try (IntLit <$> lexeme' intLit)
+        <|> try (StrLit <$> lexeme' stringLit)
+        <|> try (Var <$> lexeme' qualIdentRaw)
         <|> paren
 
+    argAtom :: Parser Expr
     argAtom =
-      try (FloatLit <$> floatLit)
-        <|> try (IntLit <$> intLit)
-        <|> try (StrLit <$> stringLit)
-        <|> try (Var <$> qualIdent)
+      try (FloatLit <$> lexeme' floatLit)
+        <|> try (IntLit <$> lexeme' intLit)
+        <|> try (StrLit <$> lexeme' stringLit)
+        <|> try (Var <$> lexeme' qualIdentRaw)
         <|> paren
 
+    paren :: Parser Expr
     paren = do
-      _ <- symbol "("
-      e <- expr
-      _ <- symbol ")"
+      _ <- symbol' "("
+      e <- exprWith sc' blockRefPos
+      _ <- symbol' ")"
       return e
 
-    letExpr = do
-      _ <- keyword "let"
-      i <- ident
-      p <- many ident
-      _ <- symbol "="
-      e <- expr
-      return (Let i p e)
-
+    ifExpr :: Parser Expr
     ifExpr = do
-      _ <- keyword "if"
-      cond <- expr
-      _ <- keyword "then"
-      thenBranch <- expr
-      _ <- keyword "else"
-      elseBranch <- expr
+      ifCol <- indentLevel
+      _ <- keyword' "if"
+      cond <- exprWith sc' blockRefPos
+      _ <- atLeast ifCol *> keyword' "then"
+      thenBranch <- exprWith sc' blockRefPos
+      _ <- atLeast blockRefPos *> keyword' "else" -- blockRefPos: allows else-if chains
+      elseBranch <- exprWith sc' blockRefPos
       return (If cond thenBranch elseBranch)
 
     binaryOpExpr :: T.Text -> Operator Parser Expr
-    binaryOpExpr op = InfixL $ lexeme $ do
+    binaryOpExpr op = InfixL $ lexeme' $ do
       _ <- string op
       return (\e1 e2 -> BinaryOp e1 op e2)
 
     -- Like binaryOpExpr, but fails (without consuming) if followed by the given
     -- char. Used to disambiguate operators sharing a prefix: & vs &&, | vs ||.
     binaryOpExprNotFollowedBy :: T.Text -> T.Text -> Operator Parser Expr
-    binaryOpExprNotFollowedBy op notFollowedBy' = InfixL $ try $ lexeme $ do
+    binaryOpExprNotFollowedBy op notFollowedBy' = InfixL $ try $ lexeme' $ do
       _ <- string op
       notFollowedBy (string notFollowedBy')
       return (\e1 e2 -> BinaryOp e1 op e2)

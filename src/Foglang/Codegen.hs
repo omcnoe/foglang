@@ -1,4 +1,4 @@
-module Foglang.Codegen (codegen, codegenGoFile) where
+module Foglang.Codegen (codegenGoFile) where
 
 import Data.Text qualified as T
 import Foglang.AST (Expr (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), PackageClause (..), StringLit (..))
@@ -18,6 +18,9 @@ intLitText (Hex t) = t
 floatLitText :: FloatLit -> T.Text
 floatLitText (DecimalFloat t) = t
 floatLitText (HexFloat t) = t
+
+paramListText :: [Ident] -> T.Text
+paramListText params = T.intercalate ", " [identText p <> " any" | p <- params, p /= Ident "()"]
 
 genElsePart :: Int -> Expr -> T.Text
 genElsePart indent (If cond then' else') =
@@ -49,6 +52,18 @@ genIfChain indent cond then' else' =
 -- Generate statements for a function body, with the given indent level
 genBody :: Int -> Expr -> T.Text
 genBody indent (If cond then' else') = genIfChain indent cond then' else'
+genBody indent (Sequence exprs)
+  | null exprs = ind indent <> "return ()\n"
+  | otherwise =
+      T.concat (map (genStmtBody indent) (init exprs))
+        <> genBody indent (last exprs)
+genBody indent (Let name [] rhs inExpr) =
+  ind indent <> identText name <> " := " <> genExpr rhs <> "\n"
+    <> genBody indent inExpr
+genBody indent (Let name params rhs inExpr) =
+  ind indent <> identText name <> " := func(" <> paramListText params <> ") any { return "
+    <> genExpr rhs <> " }\n"
+    <> genBody indent inExpr
 genBody indent e = ind indent <> "return " <> genExpr e <> "\n"
 
 genFunc :: Ident -> [Ident] -> Expr -> T.Text
@@ -56,12 +71,10 @@ genFunc name params body =
   "func "
     <> identText name
     <> "("
-    <> paramList
+    <> paramListText params
     <> ") any {\n"
     <> genBody 1 body
     <> "}\n\n"
-  where
-    paramList = T.intercalate ", " [identText p <> " any" | p <- params, p /= Ident "()"]
 
 genMainFunc :: Expr -> T.Text
 genMainFunc body =
@@ -72,6 +85,14 @@ genMainFunc body =
 -- Like genBody but emits the expression as a plain statement (no 'return').
 genStmtBody :: Int -> Expr -> T.Text
 genStmtBody indent (If cond then' else') = genIfChain indent cond then' else'
+genStmtBody indent (Sequence exprs) = T.concat (map (genStmtBody indent) exprs)
+genStmtBody indent (Let name [] rhs inExpr) =
+  ind indent <> identText name <> " := " <> genExpr rhs <> "\n"
+    <> genStmtBody indent inExpr
+genStmtBody indent (Let name params rhs inExpr) =
+  ind indent <> identText name <> " := func(" <> paramListText params <> ") any { return "
+    <> genExpr rhs <> " }\n"
+    <> genStmtBody indent inExpr
 genStmtBody indent e = ind indent <> genExpr e <> "\n"
 
 -- Generate a Go expression. BinaryOp sub-expressions are parenthesised to
@@ -85,10 +106,19 @@ genExpr (BinaryOp e1 op e2) = "(" <> genExpr e1 <> " " <> op <> " " <> genExpr e
 genExpr (Application f args) = genExpr f <> "(" <> T.intercalate ", " (map genExpr args) <> ")"
 genExpr (If cond then' else') =
   "func() any { if " <> genExpr cond <> " { return " <> genExpr then' <> " }; return " <> genExpr else' <> " }()"
-genExpr (Let name [] body) =
-  "func() any { " <> identText name <> " := " <> genExpr body <> "; return " <> identText name <> " }()"
-genExpr (Let (Ident "main") _ body) = genMainFunc body
-genExpr (Let name params body) = genFunc name params body
+genExpr (Sequence []) = "()"
+genExpr (Sequence exprs) =
+  "func() any { "
+    <> T.intercalate "; " (map genExpr (init exprs))
+    <> "; return "
+    <> genExpr (last exprs)
+    <> " }()"
+genExpr (Let name [] rhs inExpr) =
+  "func() any { " <> identText name <> " := " <> genExpr rhs
+    <> "; return " <> genExpr inExpr <> " }()"
+genExpr (Let name params rhs inExpr) =
+  "func() any { " <> identText name <> " := func(" <> paramListText params <> ") any { return "
+    <> genExpr rhs <> " }; return " <> genExpr inExpr <> " }()"
 
 codegenImport :: ImportDecl -> T.Text
 codegenImport (ImportDecl None path) = "import \"" <> path <> "\"\n"
@@ -105,21 +135,32 @@ codegenHeader (Header (PackageClause pkg) imports) =
     <> T.concat (map codegenImport imports)
     <> "\n"
 
-codegenDecl :: Expr -> T.Text
-codegenDecl (Let (Ident "main") _ body) = genMainFunc body
-codegenDecl (Let name [] body) = "var " <> identText name <> " = " <> genExpr body <> "\n"
-codegenDecl (Let name params body) = genFunc name params body
-codegenDecl e = genExpr e <> "\n"
+codegenDecl :: Ident -> [Ident] -> Expr -> T.Text
+codegenDecl (Ident "main") _ body = genMainFunc body
+codegenDecl name [] (Sequence exprs) =
+  "var " <> identText name <> " = func() any {\n"
+    <> genBody 1 (Sequence exprs)
+    <> "}()\n\n"
+codegenDecl name [] body = "var " <> identText name <> " = " <> genExpr body <> "\n"
+codegenDecl name params body = genFunc name params body
 
-header :: T.Text
-header = "package main\n\n"
+-- True for expressions that may be valid Go statements (have child Exprs that
+-- could carry side effects). These are collected into an init() function.
+isStmtExpr :: Expr -> Bool
+isStmtExpr (Application _ _) = True
+isStmtExpr (If _ _ _) = True
+isStmtExpr (Sequence _) = True
+isStmtExpr (BinaryOp _ _ _) = True
+isStmtExpr _ = False
 
--- Generate a Go top-level declaration from a foglang expression
-codegen :: Expr -> T.Text
-codegen (Let (Ident "main") _ body) = header <> genMainFunc body
-codegen (Let name [] body) = header <> "var " <> identText name <> " = " <> genExpr body <> "\n"
-codegen (Let name params body) = header <> genFunc name params body
-codegen e = header <> genExpr e <> "\n"
+-- Walk the top-level body in source order, emitting declarations and
+-- inline init() functions for bare statement expressions.
+codegenTopLevel :: Expr -> T.Text
+codegenTopLevel (Let n p r i) = codegenDecl n p r <> codegenTopLevel i
+codegenTopLevel (Sequence exprs) = T.concat (map codegenTopLevel exprs)
+codegenTopLevel e
+  | isStmtExpr e = "func init() {\n" <> genStmtBody 1 e <> "}\n"
+  | otherwise = ""
 
 codegenGoFile :: FogFile -> T.Text
-codegenGoFile (FogFile hdr exprs) = codegenHeader hdr <> T.concat (map codegenDecl exprs)
+codegenGoFile (FogFile hdr body) = codegenHeader hdr <> codegenTopLevel body

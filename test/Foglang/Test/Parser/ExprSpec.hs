@@ -2,16 +2,16 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Expr (..), FloatLit (..), IntLit (..))
-import Foglang.Parser.Expr qualified as Parser.Expr
+import Foglang.Parser.Expr (exprBlock)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
 
 spec :: Spec
 spec = do
   let validLet =
-        [ ("let x = 1", Let "x" [] (IntLit (Decimal "1"))),
-          ("let x=2", Let "x" [] (IntLit (Decimal "2"))),
-          ("let x p1 p2 = 7", Let "x" ["p1", "p2"] (IntLit (Decimal "7")))
+        [ ("let x = 1", Let "x" [] (IntLit (Decimal "1")) (Sequence [])),
+          ("let x=2", Let "x" [] (IntLit (Decimal "2")) (Sequence [])),
+          ("let x p1 p2 = 7", Let "x" ["p1", "p2"] (IntLit (Decimal "7")) (Sequence []))
         ]
 
   let invalidLet =
@@ -120,35 +120,28 @@ spec = do
           "f let x = 1"
         ]
 
-  let parseExpr s = parse (Parser.Expr.expr <* eof) "ExprSpec.hs" s
+  let parseExpr s = parse (exprBlock <* eof) "ExprSpec.hs" s
 
-  describe "expr" $ do
-    it "parses valid let expressions" $
+  describe "exprBlock parses" $ do
+    it "let" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validLet
-
-    it "rejects invalid let expressions" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidLet
-
-    it "parses valid binary op expressions" $
+    it "binary op" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validBinaryOp
-
-    it "rejects invalid binary op expressions" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidBinaryOp
-
-    it "parses valid if expressions" $
+    it "if" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validIf
-
-    it "rejects invalid if expressions" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIf
-
-    it "parses valid paren expressions" $
+    it "paren" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validParen
-
-    it "rejects invalid paren expressions" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
-
-    it "parses valid application expressions" $
+    it "application" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validApplication
 
-    it "rejects invalid application expressions" $
+  describe "exprBlock rejects" $ do
+    it "invalid let" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidLet
+    it "invalid binary op" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidBinaryOp
+    it "invalid if" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIf
+    it "invalid paren" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
+    it "invalid application" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidApplication

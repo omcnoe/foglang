@@ -47,15 +47,14 @@ spec = do
 
   let parseIntLit s = parse (intLit <* eof) "IntLitSpec.hs" s
 
-  describe "intLit" $ do
-    it "parses go spec examples" $
+  describe "intLit parses" $ do
+    it "go spec examples" $
       mapM_ (\(s, con) -> parseIntLit s `shouldBe` Right (con s)) specValid
-
-    it "parses extra examples" $
+    it "extra examples" $
       mapM_ (\(s, con) -> parseIntLit s `shouldBe` Right (con s)) extraValid
 
-    it "rejects go spec invalid examples" $
+  describe "intLit rejects" $ do
+    it "go spec invalid examples" $
       mapM_ (\s -> parseIntLit s `shouldSatisfy` isLeft) specInvalid
-
-    it "rejects extra double underscore after prefix" $
+    it "double underscore after prefix" $
       mapM_ (\s -> parseIntLit s `shouldSatisfy` isLeft) doubleUnderscoreAfterPrefixInvalid

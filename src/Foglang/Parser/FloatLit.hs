@@ -2,7 +2,8 @@ module Foglang.Parser.FloatLit (floatLit) where
 
 import Data.Text qualified as T
 import Foglang.AST (FloatLit (..))
-import Foglang.Parser (Parser, decimalDigits, hexDigits, lexeme)
+import Foglang.Parser (Parser)
+import Foglang.Parser.Digits (decimalDigits, hexDigits)
 import Text.Megaparsec (option, satisfy, try, (<|>))
 import Text.Megaparsec.Char (string, string')
 
@@ -79,4 +80,4 @@ hexFloatLit = do
       return $ "." <> digits
 
 floatLit :: Parser FloatLit
-floatLit = lexeme $ try hexFloatLit <|> decimalFloatLit
+floatLit = try hexFloatLit <|> decimalFloatLit

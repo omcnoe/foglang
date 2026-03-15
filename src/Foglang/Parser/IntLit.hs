@@ -2,7 +2,8 @@ module Foglang.Parser.IntLit (intLit) where
 
 import Data.Text qualified as T
 import Foglang.AST (IntLit (..))
-import Foglang.Parser (Parser, binaryDigits, decimalDigits, hexDigits, lexeme, octalDigits)
+import Foglang.Parser (Parser)
+import Foglang.Parser.Digits (binaryDigits, decimalDigits, hexDigits, octalDigits)
 import Text.Megaparsec (option, satisfy, try, (<|>))
 import Text.Megaparsec.Char (string, string')
 
@@ -49,4 +50,4 @@ hexLit = do
   return $ Hex $ prefix <> sep <> digits
 
 intLit :: Parser IntLit
-intLit = lexeme $ try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit
+intLit = try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit

@@ -27,12 +27,12 @@ groupedImports = between (symbol "(") (symbol ")") (many import')
 
 importDecl :: Parser [ImportDecl]
 importDecl = do
-  _ <- keyword "import"
+  _ <- lexeme (keyword "import")
   (: []) <$> import' <|> groupedImports
 
 packageClause :: Parser PackageClause
 packageClause = do
-  _ <- keyword "package"
+  _ <- lexeme (keyword "package")
   PackageClause <$> headerIdent
 
 header :: Parser Header

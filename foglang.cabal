@@ -28,6 +28,7 @@ library
       Foglang.AST
       Foglang.Codegen
       Foglang.Parser
+      Foglang.Parser.Digits
       Foglang.Parser.Expr
       Foglang.Parser.FloatLit
       Foglang.Parser.FogFile
@@ -75,14 +76,12 @@ test-suite foglang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Foglang.Test.Cases.HelloWorldSpec
-      Foglang.Test.Cases.LambdaSpec
-      Foglang.Test.Cases.LeapYearSpec
       Foglang.Test.Parser.ExprSpec
       Foglang.Test.Parser.FloatLitSpec
       Foglang.Test.Parser.HeaderSpec
       Foglang.Test.Parser.IdentSpec
       Foglang.Test.Parser.IntLitSpec
+      Foglang.Test.ProgramsSpec
       Foglang.Test.Util
       Paths_foglang
   autogen-modules:

@@ -24,9 +24,10 @@ spec = do
 
   let parseIdent s = parse (ident <* eof) "IdentSpec.hs" s
 
-  describe "ident" $ do
-    it "parses valid identifiers" $
+  describe "ident parses" $ do
+    it "identifiers" $
       mapM_ (\s -> parseIdent s `shouldBe` Right (Ident s)) valid
 
-    it "rejects invalid identifiers" $
+  describe "ident rejects" $ do
+    it "invalid identifiers" $
       mapM_ (\s -> parseIdent s `shouldSatisfy` isLeft) invalid
