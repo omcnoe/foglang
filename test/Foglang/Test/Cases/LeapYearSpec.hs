@@ -4,7 +4,8 @@ import Data.FileEmbed (embedStringFile)
 import Data.Text qualified as T
 import Foglang.Codegen (codegenGoFile)
 import Foglang.Parser.FogFile (fogFile)
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Foglang.Test.Util (shouldParseAndCodegenTo)
+import Test.Hspec (Spec, describe, it)
 import Text.Megaparsec (eof, parse)
 
 leapYearFogSrc :: T.Text
@@ -17,4 +18,4 @@ spec :: Spec
 spec = describe "leapyear" $ do
   it "parses and codegens to expected Go output" $
     fmap codegenGoFile (parse (fogFile <* eof) "leapyear.fog" leapYearFogSrc)
-      `shouldBe` Right leapYearGoSrc
+      `shouldParseAndCodegenTo` leapYearGoSrc

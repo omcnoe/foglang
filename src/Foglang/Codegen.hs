@@ -1,16 +1,13 @@
 module Foglang.Codegen (codegen, codegenGoFile) where
 
 import Data.Text qualified as T
-import Foglang.AST (Expr (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), PackageClause (..), QualIdent (..))
+import Foglang.AST (Expr (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), PackageClause (..), StringLit (..))
 
 ind :: Int -> T.Text
 ind n = T.replicate n "\t"
 
 identText :: Ident -> T.Text
 identText (Ident t) = t
-
-qualIdentText :: QualIdent -> T.Text
-qualIdentText (QualIdent parts) = T.intercalate "." (map identText parts)
 
 intLitText :: IntLit -> T.Text
 intLitText (Decimal t) = t
@@ -62,22 +59,35 @@ genFunc name params body =
     <> paramList
     <> ") any {\n"
     <> genBody 1 body
-    <> "}\n"
+    <> "}\n\n"
   where
-    paramList = T.intercalate ", " (map ((<> " any") . identText) params)
+    paramList = T.intercalate ", " [identText p <> " any" | p <- params, p /= Ident "()"]
+
+genMainFunc :: Expr -> T.Text
+genMainFunc body =
+  "func main() {\n"
+    <> genStmtBody 1 body
+    <> "}\n"
+
+-- Like genBody but emits the expression as a plain statement (no 'return').
+genStmtBody :: Int -> Expr -> T.Text
+genStmtBody indent (If cond then' else') = genIfChain indent cond then' else'
+genStmtBody indent e = ind indent <> genExpr e <> "\n"
 
 -- Generate a Go expression. BinaryOp sub-expressions are parenthesised to
 -- preserve foglang's precedences without relying on Go's
 genExpr :: Expr -> T.Text
-genExpr (Var qi) = qualIdentText qi
+genExpr (Var i) = identText i
 genExpr (IntLit lit) = intLitText lit
 genExpr (FloatLit lit) = floatLitText lit
+genExpr (StrLit (StringLit t)) = "\"" <> t <> "\""
 genExpr (BinaryOp e1 op e2) = "(" <> genExpr e1 <> " " <> op <> " " <> genExpr e2 <> ")"
 genExpr (Application f args) = genExpr f <> "(" <> T.intercalate ", " (map genExpr args) <> ")"
 genExpr (If cond then' else') =
   "func() any { if " <> genExpr cond <> " { return " <> genExpr then' <> " }; return " <> genExpr else' <> " }()"
 genExpr (Let name [] body) =
   "func() any { " <> identText name <> " := " <> genExpr body <> "; return " <> identText name <> " }()"
+genExpr (Let (Ident "main") _ body) = genMainFunc body
 genExpr (Let name params body) = genFunc name params body
 
 codegenImport :: ImportDecl -> T.Text
@@ -96,6 +106,7 @@ codegenHeader (Header (PackageClause pkg) imports) =
     <> "\n"
 
 codegenDecl :: Expr -> T.Text
+codegenDecl (Let (Ident "main") _ body) = genMainFunc body
 codegenDecl (Let name [] body) = "var " <> identText name <> " = " <> genExpr body <> "\n"
 codegenDecl (Let name params body) = genFunc name params body
 codegenDecl e = genExpr e <> "\n"
@@ -105,6 +116,7 @@ header = "package main\n\n"
 
 -- Generate a Go top-level declaration from a foglang expression
 codegen :: Expr -> T.Text
+codegen (Let (Ident "main") _ body) = header <> genMainFunc body
 codegen (Let name [] body) = header <> "var " <> identText name <> " = " <> genExpr body <> "\n"
 codegen (Let name params body) = header <> genFunc name params body
 codegen e = header <> genExpr e <> "\n"

@@ -1,0 +1,6 @@
+package main
+
+import "fmt"
+
+let main () =
+    fmt.Println "Hello World"

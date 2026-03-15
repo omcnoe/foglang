@@ -11,3 +11,8 @@ func isLeapYear(year any) any {
 		return ((year % 4) == 0)
 	}
 }
+
+func main() {
+	fmt.Println(isLeapYear(2000))
+	fmt.Println(isLeapYear(2004))
+}

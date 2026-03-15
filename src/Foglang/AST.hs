@@ -1,9 +1,8 @@
 module Foglang.AST
   ( Ident (..),
-    QualIdent (..),
-    unitIdent,
     IntLit (..),
     FloatLit (..),
+    StringLit (..),
     Expr (..),
     PackageClause (..),
     ImportAlias (..),
@@ -19,19 +18,8 @@ import Data.Text qualified as T
 data Ident = Ident T.Text
   deriving (Eq, Show)
 
--- TODO golang only allows one level of qualification package.name, do we have different requirements? Leave as is for now.
-data QualIdent = QualIdent [Ident]
-  deriving (Eq, Show)
-
--- TODO maybe QualIdent should be a sum type? Anyway it's not important right now.
-unitIdent :: QualIdent
-unitIdent = QualIdent [Ident "()"]
-
 instance IsString Ident where
   fromString = Ident . T.pack
-
-instance IsString QualIdent where
-  fromString = QualIdent . map Ident . T.splitOn "." . T.pack
 
 data IntLit
   = Decimal T.Text
@@ -45,10 +33,14 @@ data FloatLit
   | HexFloat T.Text
   deriving (Eq, Show)
 
+newtype StringLit = StringLit T.Text
+  deriving (Eq, Show)
+
 data Expr
-  = Var QualIdent
+  = Var Ident
   | IntLit IntLit
   | FloatLit FloatLit
+  | StrLit StringLit
   | Let Ident [Ident] Expr
   | If Expr Expr Expr
   | BinaryOp Expr T.Text Expr

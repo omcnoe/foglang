@@ -6,3 +6,7 @@ let isLeapYear year =
   if year % 400 == 0 then true
   else if year % 100 == 0 then false
   else year % 4 == 0
+
+let main () =
+  fmt.Println(isLeapYear 2000)
+  fmt.Println(isLeapYear 2004)

@@ -2,7 +2,7 @@ module Foglang.Parser.Header (header) where
 
 import Foglang.AST (Header (..), Ident (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
 import Foglang.Parser (Parser, keyword, lexeme, symbol)
-import Foglang.Parser.Ident (ident)
+import Foglang.Parser.Ident (headerIdent)
 import Text.Megaparsec (between, many, takeWhile1P, (<|>))
 import Text.Megaparsec.Char (char)
 
@@ -10,7 +10,7 @@ import' :: Parser ImportDecl
 import' = do
   alias <-
     (Dot <$ symbol ".")
-      <|> (toAlias <$> ident)
+      <|> (toAlias <$> headerIdent)
       <|> return None
   path <- lexeme $ do
     _ <- char '"'
@@ -33,7 +33,7 @@ importDecl = do
 packageClause :: Parser PackageClause
 packageClause = do
   _ <- keyword "package"
-  PackageClause <$> ident
+  PackageClause <$> headerIdent
 
 header :: Parser Header
 header = do

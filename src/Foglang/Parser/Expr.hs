@@ -7,7 +7,9 @@ import Foglang.Parser (Parser, keyword, lexeme, symbol)
 import Foglang.Parser.FloatLit (floatLit)
 import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
-import Text.Megaparsec (chunk, many, notFollowedBy, some, try, (<|>))
+import Foglang.Parser.StringLit (stringLit)
+import Text.Megaparsec (many, notFollowedBy, some, try, (<|>))
+import Text.Megaparsec.Char (string)
 
 expr :: Parser Expr
 expr = makeExprParser atom operatorTable
@@ -17,12 +19,14 @@ expr = makeExprParser atom operatorTable
         <|> try ifExpr
         <|> try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
+        <|> try (StrLit <$> stringLit)
         <|> try (Var <$> qualIdent)
         <|> paren
 
     argAtom =
       try (FloatLit <$> floatLit)
         <|> try (IntLit <$> intLit)
+        <|> try (StrLit <$> stringLit)
         <|> try (Var <$> qualIdent)
         <|> paren
 
@@ -51,15 +55,15 @@ expr = makeExprParser atom operatorTable
 
     binaryOpExpr :: T.Text -> Operator Parser Expr
     binaryOpExpr op = InfixL $ lexeme $ do
-      _ <- chunk op
+      _ <- string op
       return (\e1 e2 -> BinaryOp e1 op e2)
 
     -- Like binaryOpExpr, but fails (without consuming) if followed by the given
     -- char. Used to disambiguate operators sharing a prefix: & vs &&, | vs ||.
     binaryOpExprNotFollowedBy :: T.Text -> T.Text -> Operator Parser Expr
     binaryOpExprNotFollowedBy op notFollowedBy' = InfixL $ try $ lexeme $ do
-      _ <- chunk op
-      notFollowedBy (chunk notFollowedBy')
+      _ <- string op
+      notFollowedBy (string notFollowedBy')
       return (\e1 e2 -> BinaryOp e1 op e2)
 
     applicationExpr :: Operator Parser Expr

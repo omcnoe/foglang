@@ -1,13 +1,12 @@
-module Foglang.Parser.Ident (ident, qualIdent) where
+module Foglang.Parser.Ident (ident, qualIdent, headerIdent) where
 
 import Data.Char (isDigit)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Foglang.AST (Ident (..), QualIdent (..), unitIdent)
+import Foglang.AST (Ident (..))
 import Foglang.Parser (Parser, isLetter, lexeme, symbol)
 import Text.Megaparsec (satisfy, sepBy1, takeWhileP, try, (<|>))
-
--- identifier = letter { letter | unicode_digit } .
+import Text.Megaparsec.Char (char)
 
 reserved :: Set.Set T.Text
 reserved =
@@ -43,8 +42,10 @@ reserved =
       "then"
     ]
 
-ident :: Parser Ident
-ident = lexeme $ try $ do
+-- identifier = letter { letter | unicode_digit } .
+-- Raw, no qualification or unit handling. No trailing whitespace consumed.
+identRaw :: Parser Ident
+identRaw = try $ do
   c <- satisfy isLetter
   cs <- takeWhileP Nothing (\ch -> isLetter ch || isDigit ch)
   let raw = c `T.cons` cs
@@ -52,14 +53,16 @@ ident = lexeme $ try $ do
     then fail $ T.unpack $ "reserved keyword: " <> raw
     else return (Ident raw)
 
-qualIdent :: Parser QualIdent
-qualIdent =
-  unitIdent' <|> qualIdent'
-  where
-    unitIdent' = do
-      _ <- symbol "()"
-      return unitIdent
-    qualIdent' =
-      lexeme $ try $ do
-        parts <- ident `sepBy1` symbol "."
-        return (QualIdent parts)
+-- Identifier, or unit "()"
+ident :: Parser Ident
+ident = (Ident "()" <$ symbol "()") <|> (lexeme identRaw)
+
+-- Dot-qualified identifier, e.g. "fmt.Println". No spaces around dots
+qualIdent :: Parser Ident
+qualIdent = lexeme $ try $ do
+  parts <- identRaw `sepBy1` char '.'
+  return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) parts
+
+-- Plain identifier for use in file headers (package names, import aliases). No unit "()" handling
+headerIdent :: Parser Ident
+headerIdent = lexeme identRaw

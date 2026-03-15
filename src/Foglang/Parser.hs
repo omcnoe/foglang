@@ -4,8 +4,8 @@ import Data.Char (isDigit, isHexDigit, isOctDigit)
 import Data.Char qualified as Data.Char
 import Data.Text qualified as T
 import Data.Void (Void)
-import Text.Megaparsec (Parsec, chunk, notFollowedBy, satisfy, takeWhile1P, try)
-import Text.Megaparsec.Char (space1)
+import Text.Megaparsec (Parsec, notFollowedBy, satisfy, takeWhile1P, try)
+import Text.Megaparsec.Char (space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 type Parser = Parsec Void T.Text
@@ -29,7 +29,7 @@ symbol s = L.symbol spaceconsumer s
 
 keyword :: T.Text -> Parser T.Text
 keyword kw = lexeme $ try $ do
-  t <- chunk kw
+  t <- string kw
   notFollowedBy (satisfy (\c -> isLetter c || isDigit c)) -- disambiguate from identifiers that may have keyword as prefix
   return t
 
