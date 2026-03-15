@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-func isLeapYear(year any) any {
+func isLeapYear(year int) bool {
 	if ((year % 400) == 0) {
 		return true
 	} else if ((year % 100) == 0) {

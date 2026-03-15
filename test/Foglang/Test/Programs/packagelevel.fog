@@ -2,20 +2,20 @@ package main
 
 import "fmt"
 
-let double n = n * 2
+let mult (a : float64) -> (b : float64) => float64 = a * b
 
-fmt.Println (double 3)
-fmt.Println (double 6)
+fmt.Println (mult 2.0 3.0)
+fmt.Println (mult 0.5 6.0)
 
-let base = 10
+let base : int = 10
 
-let offset =
+let offset : int =
   fmt.Println "Computing offset"
   25
 
-let main () =
+let main () => unit =
   fmt.Println base
   fmt.Println offset
   fmt.Println (base + offset)
 
-fmt.Println (double 9)
+fmt.Println (mult 1.5 9.0)

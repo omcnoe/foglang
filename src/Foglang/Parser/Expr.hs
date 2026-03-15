@@ -3,13 +3,13 @@ module Foglang.Parser.Expr (exprBlock) where
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Expr (..), Ident (..))
+import Foglang.AST (Expr (..), Ident (..), Param (..), TypeExpr (..))
 import Foglang.Parser (Parser, SC, keyword, lexeme, scn, symbol)
 import Foglang.Parser.FloatLit (floatLit)
-import Foglang.Parser.Ident (ident, identRaw)
+import Foglang.Parser.Ident (identRaw)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
-import Text.Megaparsec (Pos, many, notFollowedBy, sepBy1, some, try, (<|>))
+import Text.Megaparsec (Pos, many, notFollowedBy, optional, sepBy1, some, try, (<|>))
 import Text.Megaparsec.Char (char, string)
 import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard, indentLevel, lineFold)
 
@@ -38,17 +38,56 @@ lineFoldExpr refPos = lineFold scn (\sc' -> exprWith sc' refPos)
 letExpr :: Pos -> Parser Expr
 letExpr refPos = do
   _ <- lexeme (keyword "let")
-  i <- lexeme identRaw
-  p <- many ident -- ident handles "()" unit param
+  name <- lexeme identRaw
+
+  params <- do
+    firstParam <- optional param
+    restParams <- case firstParam of
+      Nothing -> return []
+      Just _ -> many $ optional (symbol "->") *> param
+    return $ maybe [] (: restParams) firstParam
+
+  typeAnno <- case params of
+    [] -> symbol ":" *> typeExpr
+    _ -> symbol "=>" *> typeExpr
   _ <- symbol "="
+
   rhs <- exprBlock
+
   inExprs <- many (try $ indentGuard scn EQ refPos *> exprBlockItem refPos)
-  -- Sequence [] as the empty inExpr terminal; extractTopLevel handles it cleanly.
   let inExpr = case inExprs of
         [] -> Sequence []
         [x] -> x
         xs -> Sequence xs
-  return $ Let i p rhs inExpr
+
+  return $ Let name params typeAnno rhs inExpr
+  where
+    param :: Parser Param
+    param =
+      (UnitParam <$ symbol "()")
+        <|> try
+          ( do
+              _ <- symbol "("
+              name <- lexeme identRaw
+              _ <- symbol ":"
+              ty <- typeExpr
+              _ <- symbol ")"
+              return $ TypedParam name ty
+          )
+
+    typeExpr :: Parser TypeExpr
+    typeExpr = (NamedType <$> lexeme identRaw) <|> funcTypeExpr
+
+    funcTypeExpr :: Parser TypeExpr
+    funcTypeExpr = do
+      _ <- symbol "("
+      paramTys <- typeExpr `sepBy1` symbol "->"
+      ret <- optional $ try $ symbol "=>" *> typeExpr
+      _ <- symbol ")"
+      case (paramTys, ret) of
+        ([t], Nothing) -> return t
+        (ts, Just r) -> return $ FuncType ts r
+        _ -> fail "function type requires => return type"
 
 -- Expression parser parameterised on a space consumer and a block reference
 -- position. sc' controls how far whitespace is consumed between tokens.

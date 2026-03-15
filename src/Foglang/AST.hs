@@ -3,6 +3,8 @@ module Foglang.AST
     IntLit (..),
     FloatLit (..),
     StringLit (..),
+    TypeExpr (..),
+    Param (..),
     Expr (..),
     PackageClause (..),
     ImportAlias (..),
@@ -36,12 +38,22 @@ data FloatLit
 newtype StringLit = StringLit T.Text
   deriving (Eq, Show)
 
+data TypeExpr
+  = NamedType Ident -- named type, e.g. int, float64, bool, unit
+  | FuncType [TypeExpr] TypeExpr -- function type: (T1 -> T2 -> ... => Tr)
+  deriving (Eq, Show)
+
+data Param
+  = UnitParam -- ()
+  | TypedParam Ident TypeExpr -- (name : type)
+  deriving (Eq, Show)
+
 data Expr
   = Var Ident
   | IntLit IntLit
   | FloatLit FloatLit
   | StrLit StringLit
-  | Let Ident [Ident] Expr Expr
+  | Let Ident [Param] TypeExpr Expr Expr -- name, params, type annotation, rhs, inExpr
   | If Expr Expr Expr
   | BinaryOp Expr T.Text Expr
   | Application Expr [Expr]
@@ -52,10 +64,10 @@ newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
 data ImportAlias
-  = None -- import qualified by package name
-  | Alias Ident -- import qualified by alias
-  | Dot -- import without qualifiers (dangerous)
-  | Blank -- import for side effects only
+  = None        -- qualified by package name
+  | Alias Ident
+  | Dot         -- without qualifiers (dangerous)
+  | Blank       -- side effects only
   deriving (Eq, Show)
 
 data ImportDecl = ImportDecl ImportAlias T.Text

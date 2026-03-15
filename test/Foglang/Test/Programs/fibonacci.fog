@@ -2,9 +2,9 @@ package main
 
 import "fmt"
 
-let fib n =
+let fib (n : int) => int =
   if n <= 1 then n
   else fib (n - 1) + fib (n - 2)
 
-let main () =
+let main () => unit =
   fmt.Println (fib 10)

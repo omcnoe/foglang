@@ -2,5 +2,5 @@ package main
 
 import "fmt"
 
-let main () =
+let main () => unit =
   fmt.Println "Hello World"

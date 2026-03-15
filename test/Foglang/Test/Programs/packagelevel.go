@@ -2,18 +2,18 @@ package main
 
 import "fmt"
 
-func double(n any) any {
-	return (n * 2)
+func mult(a float64, b float64) float64 {
+	return (a * b)
 }
 
 func init() {
-	fmt.Println(double(3))
+	fmt.Println(mult(2.0, 3.0))
 }
 func init() {
-	fmt.Println(double(6))
+	fmt.Println(mult(0.5, 6.0))
 }
-var base = 10
-var offset = func() any {
+var base int = 10
+var offset int = func() int {
 	fmt.Println("Computing offset")
 	return 25
 }()
@@ -24,5 +24,5 @@ func main() {
 	fmt.Println((base + offset))
 }
 func init() {
-	fmt.Println(double(9))
+	fmt.Println(mult(1.5, 9.0))
 }

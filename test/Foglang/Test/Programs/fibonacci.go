@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-func fib(n any) any {
+func fib(n int) int {
 	if (n <= 1) {
 		return n
 	} else {

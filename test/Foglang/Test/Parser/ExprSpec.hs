@@ -1,7 +1,7 @@
 module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
-import Foglang.AST (Expr (..), FloatLit (..), IntLit (..))
+import Foglang.AST (Expr (..), FloatLit (..), IntLit (..), Param (..), TypeExpr (..))
 import Foglang.Parser.Expr (exprBlock)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
@@ -9,15 +9,25 @@ import Text.Megaparsec (eof, parse)
 spec :: Spec
 spec = do
   let validLet =
-        [ ("let x = 1", Let "x" [] (IntLit (Decimal "1")) (Sequence [])),
-          ("let x=2", Let "x" [] (IntLit (Decimal "2")) (Sequence [])),
-          ("let x p1 p2 = 7", Let "x" ["p1", "p2"] (IntLit (Decimal "7")) (Sequence []))
+        [ ("let x : int = 1", Let "x" [] (NamedType "int") (IntLit (Decimal "1")) (Sequence [])),
+          ("let x:int=2", Let "x" [] (NamedType "int") (IntLit (Decimal "2")) (Sequence [])),
+          ( "let f (x : int) => int = x",
+            Let "f" [TypedParam "x" (NamedType "int")] (NamedType "int") (Var "x") (Sequence [])
+          ),
+          ( "let f (x : int) -> (y : int) => int = x",
+            Let "f" [TypedParam "x" (NamedType "int"), TypedParam "y" (NamedType "int")] (NamedType "int") (Var "x") (Sequence [])
+          ),
+          ( "let f () => unit = x",
+            Let "f" [UnitParam] (NamedType "unit") (Var "x") (Sequence [])
+          )
         ]
 
   let invalidLet =
         [ "let x =",
           "letx = 1",
-          "let type = 1"
+          "let type = 1",
+          "let x = 1",
+          "let f x = 1"
         ]
 
   let validBinaryOp =
