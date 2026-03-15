@@ -3,22 +3,61 @@ module Foglang.Parser.Expr (exprBlock) where
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Expr (..), Ident (..), Param (..), TypeExpr (..))
-import Foglang.Parser (Parser, SC, keyword, lexeme, scn, symbol)
+import Foglang.AST (Expr (..), Param (..), TypeExpr (..))
+import Foglang.Parser (Parser, SC, keyword, scn)
 import Foglang.Parser.FloatLit (floatLit)
-import Foglang.Parser.Ident (identRaw)
+import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
 import Text.Megaparsec (Pos, many, notFollowedBy, optional, sepBy1, some, try, (<|>))
-import Text.Megaparsec.Char (char, string)
-import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard, indentLevel, lineFold)
+import Text.Megaparsec.Char (string)
+import Text.Megaparsec.Char.Lexer qualified as L (incorrectIndent, indentGuard, indentLevel, lexeme, lineFold, symbol)
+
+-- Parse a function parameter: () for unit, or (name : type).
+param :: SC -> Parser Param
+param sc' =
+  (UnitParam <$ L.symbol sc' "()")
+    <|> try
+      ( do
+          _ <- L.symbol sc' "("
+          name <- L.lexeme sc' ident
+          _ <- L.symbol sc' ":"
+          ty <- typeExpr
+          _ <- L.symbol sc' ")"
+          return $ TypedParam name ty
+      )
+
+-- Parse a sequence of function parameters (zero or more), with optional '->'
+-- separators between consecutive parameters. sc' controls whitespace/newline
+-- consumption between tokens (use scn at block level, the linefold sc' inline).
+params :: SC -> Parser [Param]
+params sc' = do
+  firstParam <- optional (param sc')
+  restParams <- case firstParam of
+    Nothing -> return []
+    Just _ -> many $ optional (L.symbol sc' "->") *> param sc'
+  return $ maybe [] (: restParams) firstParam
+
+-- Type expression: a named type or a parenthesised function type.
+typeExpr :: Parser TypeExpr
+typeExpr = (NamedType <$> L.lexeme scn ident) <|> funcTypeExpr
+
+-- Parenthesised function type: (T1 -> T2 -> ... => Tr).
+funcTypeExpr :: Parser TypeExpr
+funcTypeExpr = do
+  _ <- L.symbol scn "("
+  paramTys <- typeExpr `sepBy1` L.symbol scn "->"
+  _ <- L.symbol scn "=>"
+  retTy <- typeExpr
+  _ <- L.symbol scn ")"
+  return $ FuncType paramTys retTy
 
 -- Entrypoint for all expression parsing, parses a block of one or more expressions.
 exprBlock :: Parser Expr
 exprBlock = do
-  refPos <- indentLevel
+  refPos <- L.indentLevel
   e <- exprBlockItem refPos
-  es <- many (try $ indentGuard scn EQ refPos *> exprBlockItem refPos)
+  es <- many (try $ L.indentGuard scn EQ refPos *> exprBlockItem refPos)
   _ <- scn
   return $ case (e : es) of
     [x] -> x
@@ -33,61 +72,32 @@ exprBlockItem refPos = try (letExpr refPos) <|> lineFoldExpr refPos
 -- A line folded expression: parsed as a single logical line that may span
 -- multiple physical lines via indentation (line folding).
 lineFoldExpr :: Pos -> Parser Expr
-lineFoldExpr refPos = lineFold scn (\sc' -> exprWith sc' refPos)
+lineFoldExpr refPos = L.lineFold scn (\sc' -> exprWith sc' refPos)
 
 letExpr :: Pos -> Parser Expr
 letExpr refPos = do
-  _ <- lexeme (keyword "let")
-  name <- lexeme identRaw
+  letCol <- L.indentLevel
+  _ <- L.lexeme scn (keyword "let")
+  name <- L.lexeme scn ident
 
-  params <- do
-    firstParam <- optional param
-    restParams <- case firstParam of
-      Nothing -> return []
-      Just _ -> many $ optional (symbol "->") *> param
-    return $ maybe [] (: restParams) firstParam
+  ps <- params scn
 
-  typeAnno <- case params of
-    [] -> symbol ":" *> typeExpr
-    _ -> symbol "=>" *> typeExpr
-  _ <- symbol "="
+  typeAnno <- case ps of
+    [] -> L.symbol scn ":" *> typeExpr
+    _ -> L.symbol scn "=>" *> typeExpr
+  _ <- L.symbol scn "="
 
+  bodyCol <- L.indentLevel
+  when (bodyCol <= letCol) $ L.incorrectIndent GT letCol bodyCol
   rhs <- exprBlock
 
-  inExprs <- many (try $ indentGuard scn EQ refPos *> exprBlockItem refPos)
+  inExprs <- many (try $ L.indentGuard scn EQ refPos *> exprBlockItem refPos)
   let inExpr = case inExprs of
         [] -> Sequence []
         [x] -> x
         xs -> Sequence xs
 
-  return $ Let name params typeAnno rhs inExpr
-  where
-    param :: Parser Param
-    param =
-      (UnitParam <$ symbol "()")
-        <|> try
-          ( do
-              _ <- symbol "("
-              name <- lexeme identRaw
-              _ <- symbol ":"
-              ty <- typeExpr
-              _ <- symbol ")"
-              return $ TypedParam name ty
-          )
-
-    typeExpr :: Parser TypeExpr
-    typeExpr = (NamedType <$> lexeme identRaw) <|> funcTypeExpr
-
-    funcTypeExpr :: Parser TypeExpr
-    funcTypeExpr = do
-      _ <- symbol "("
-      paramTys <- typeExpr `sepBy1` symbol "->"
-      ret <- optional $ try $ symbol "=>" *> typeExpr
-      _ <- symbol ")"
-      case (paramTys, ret) of
-        ([t], Nothing) -> return t
-        (ts, Just r) -> return $ FuncType ts r
-        _ -> fail "function type requires => return type"
+  return $ Let name ps typeAnno rhs inExpr
 
 -- Expression parser parameterised on a space consumer and a block reference
 -- position. sc' controls how far whitespace is consumed between tokens.
@@ -112,22 +122,18 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
     atLeast :: Pos -> Parser ()
     atLeast minCol = do
       scn
-      col <- indentLevel
-      when (col < minCol) $ incorrectIndent EQ minCol col
+      col <- L.indentLevel
+      when (col < minCol) $ L.incorrectIndent EQ minCol col
 
     -- Raw qualified identifier (no trailing whitespace); wrapped by lexeme' below.
-    qualIdentRaw :: Parser Ident
-    qualIdentRaw = try $ do
-      parts <- identRaw `sepBy1` char '.'
-      return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) parts
-
     atom :: Parser Expr
     atom =
-      try ifExpr
+      try funcExpr
+        <|> try ifExpr
         <|> try (FloatLit <$> lexeme' floatLit)
         <|> try (IntLit <$> lexeme' intLit)
         <|> try (StrLit <$> lexeme' stringLit)
-        <|> try (Var <$> lexeme' qualIdentRaw)
+        <|> try (Var <$> lexeme' qualIdent)
         <|> paren
 
     argAtom :: Parser Expr
@@ -135,7 +141,7 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
       try (FloatLit <$> lexeme' floatLit)
         <|> try (IntLit <$> lexeme' intLit)
         <|> try (StrLit <$> lexeme' stringLit)
-        <|> try (Var <$> lexeme' qualIdentRaw)
+        <|> try (Var <$> lexeme' qualIdent)
         <|> paren
 
     paren :: Parser Expr
@@ -145,16 +151,34 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
       _ <- symbol' ")"
       return e
 
+    funcExpr :: Parser Expr
+    funcExpr = do
+      _ <- keyword' "func"
+      ps <- params sc'
+      typeAnno <- symbol' "=>" *> typeExpr
+      _ <- symbol' "="
+      body <- exprWith sc' blockRefPos
+      return $ Lambda ps typeAnno body
+
+    -- Anchor bodies to the 'if'/'else if'/'else' column to prevent outdenting.
+    -- For else-if chains, ifBody is called recursively with the the new anchor,
+    -- then/then-body/else of an else-if are measured from the else keyword,
+    -- not from the nested 'if' keyword which may be pushed right.
     ifExpr :: Parser Expr
     ifExpr = do
-      ifCol <- indentLevel
-      _ <- keyword' "if"
-      cond <- exprWith sc' blockRefPos
-      _ <- atLeast ifCol *> keyword' "then"
-      thenBranch <- exprWith sc' blockRefPos
-      _ <- atLeast blockRefPos *> keyword' "else" -- blockRefPos: allows else-if chains
-      elseBranch <- exprWith sc' blockRefPos
-      return (If cond thenBranch elseBranch)
+      ifCol <- L.indentLevel
+      ifBody ifCol
+      where
+        ifBody anchorCol = do
+          _ <- keyword' "if"
+          cond <- exprWith sc' blockRefPos
+          _ <- atLeast anchorCol *> keyword' "then"
+          _ <- atLeast anchorCol
+          thenBranch <- exprWith sc' blockRefPos
+          elseCol <- atLeast anchorCol *> L.indentLevel
+          _ <- keyword' "else"
+          elseBranch <- try (ifBody elseCol) <|> exprWith sc' blockRefPos
+          return (If cond thenBranch elseBranch)
 
     binaryOpExpr :: T.Text -> Operator Parser Expr
     binaryOpExpr op = InfixL $ lexeme' $ do

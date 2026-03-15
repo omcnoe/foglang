@@ -32,6 +32,12 @@ leapYearFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear.f
 leapYearGoSrc :: T.Text
 leapYearGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear.go")
 
+nestedIfFogSrc :: T.Text
+nestedIfFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.fog")
+
+nestedIfGoSrc :: T.Text
+nestedIfGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.go")
+
 packageLevelFogSrc :: T.Text
 packageLevelFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel.fog")
 
@@ -52,6 +58,9 @@ spec = describe "programs" $ do
   it "leapyear.fog -> leapyear.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "leapyear.fog" leapYearFogSrc)
       `shouldParseAndCodegenTo` leapYearGoSrc
+  it "nestedif.fog -> nestedif.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "nestedif.fog" nestedIfFogSrc)
+      `shouldParseAndCodegenTo` nestedIfGoSrc
   it "packagelevel.fog -> packagelevel.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "packagelevel.fog" packageLevelFogSrc)
       `shouldParseAndCodegenTo` packageLevelGoSrc

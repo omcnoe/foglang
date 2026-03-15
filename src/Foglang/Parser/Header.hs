@@ -1,7 +1,8 @@
 module Foglang.Parser.Header (header) where
 
 import Foglang.AST (Header (..), Ident (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
-import Foglang.Parser (Parser, keyword, lexeme, symbol)
+import Foglang.Parser (Parser, keyword, scn)
+import Text.Megaparsec.Char.Lexer qualified as L
 import Foglang.Parser.Ident (headerIdent)
 import Text.Megaparsec (between, many, takeWhile1P, (<|>))
 import Text.Megaparsec.Char (char)
@@ -9,10 +10,10 @@ import Text.Megaparsec.Char (char)
 import' :: Parser ImportDecl
 import' = do
   alias <-
-    (Dot <$ symbol ".")
+    (Dot <$ L.symbol scn ".")
       <|> (toAlias <$> headerIdent)
       <|> return None
-  path <- lexeme $ do
+  path <- L.lexeme scn $ do
     _ <- char '"'
     path <- takeWhile1P Nothing (/= '"')
     _ <- char '"'
@@ -23,16 +24,16 @@ import' = do
     toAlias i = Alias i
 
 groupedImports :: Parser [ImportDecl]
-groupedImports = between (symbol "(") (symbol ")") (many import')
+groupedImports = between (L.symbol scn "(") (L.symbol scn ")") (many import')
 
 importDecl :: Parser [ImportDecl]
 importDecl = do
-  _ <- lexeme (keyword "import")
+  _ <- L.lexeme scn (keyword "import")
   (: []) <$> import' <|> groupedImports
 
 packageClause :: Parser PackageClause
 packageClause = do
-  _ <- lexeme (keyword "package")
+  _ <- L.lexeme scn (keyword "package")
   PackageClause <$> headerIdent
 
 header :: Parser Header

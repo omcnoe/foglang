@@ -54,6 +54,7 @@ data Expr
   | FloatLit FloatLit
   | StrLit StringLit
   | Let Ident [Param] TypeExpr Expr Expr -- name, params, type annotation, rhs, inExpr
+  | Lambda [Param] TypeExpr Expr -- params, return type annotation, body
   | If Expr Expr Expr
   | BinaryOp Expr T.Text Expr
   | Application Expr [Expr]
@@ -64,10 +65,10 @@ newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
 data ImportAlias
-  = None        -- qualified by package name
+  = None -- qualified by package name
   | Alias Ident
-  | Dot         -- without qualifiers (dangerous)
-  | Blank       -- side effects only
+  | Dot -- without qualifiers (dangerous)
+  | Blank -- side effects only
   deriving (Eq, Show)
 
 data ImportDecl = ImportDecl ImportAlias T.Text

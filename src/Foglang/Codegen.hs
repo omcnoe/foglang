@@ -69,11 +69,22 @@ genBody indent (Sequence exprs)
       T.concat (map (genStmtBody indent) (init exprs))
         <> genBody indent (last exprs)
 genBody indent (Let name [] _ rhs inExpr) =
-  ind indent <> identText name <> " := " <> genExpr rhs <> "\n"
+  ind indent
+    <> identText name
+    <> " := "
+    <> genExpr rhs
+    <> "\n"
     <> genBody indent inExpr
 genBody indent (Let name params retTy rhs inExpr) =
-  ind indent <> identText name <> " := func(" <> paramListText params <> ") " <> typeExprGoText retTy <> " { return "
-    <> genExpr rhs <> " }\n"
+  ind indent
+    <> identText name
+    <> " := func("
+    <> paramListText params
+    <> ") "
+    <> typeExprGoText retTy
+    <> " { return "
+    <> genExpr rhs
+    <> " }\n"
     <> genBody indent inExpr
 genBody indent e = ind indent <> "return " <> genExpr e <> "\n"
 
@@ -107,11 +118,22 @@ genStmtBody :: Int -> Expr -> T.Text
 genStmtBody indent (If cond then' else') = genIfChain indent cond then' else'
 genStmtBody indent (Sequence exprs) = T.concat (map (genStmtBody indent) exprs)
 genStmtBody indent (Let name [] _ rhs inExpr) =
-  ind indent <> identText name <> " := " <> genExpr rhs <> "\n"
+  ind indent
+    <> identText name
+    <> " := "
+    <> genExpr rhs
+    <> "\n"
     <> genStmtBody indent inExpr
 genStmtBody indent (Let name params retTy rhs inExpr) =
-  ind indent <> identText name <> " := func(" <> paramListText params <> ") " <> typeExprGoText retTy <> " { return "
-    <> genExpr rhs <> " }\n"
+  ind indent
+    <> identText name
+    <> " := func("
+    <> paramListText params
+    <> ") "
+    <> typeExprGoText retTy
+    <> " { return "
+    <> genExpr rhs
+    <> " }\n"
     <> genStmtBody indent inExpr
 genStmtBody indent e = ind indent <> genExpr e <> "\n"
 
@@ -134,11 +156,30 @@ genExpr (Sequence exprs) =
     <> genExpr (last exprs)
     <> " }()"
 genExpr (Let name [] _ rhs inExpr) =
-  "func() any { " <> identText name <> " := " <> genExpr rhs
-    <> "; return " <> genExpr inExpr <> " }()"
+  "func() any { "
+    <> identText name
+    <> " := "
+    <> genExpr rhs
+    <> "; return "
+    <> genExpr inExpr
+    <> " }()"
 genExpr (Let name params retTy rhs inExpr) =
-  "func() any { " <> identText name <> " := func(" <> paramListText params <> ") " <> typeExprGoText retTy <> " { return "
-    <> genExpr rhs <> " }; return " <> genExpr inExpr <> " }()"
+  "func() any { "
+    <> identText name
+    <> " := func("
+    <> paramListText params
+    <> ") "
+    <> typeExprGoText retTy
+    <> " { return "
+    <> genExpr rhs
+    <> " }; return "
+    <> genExpr inExpr
+    <> " }()"
+genExpr (Lambda params retTy body) = case retTy of
+  NamedType (Ident "unit") ->
+    "func(" <> paramListText params <> ") { " <> genExpr body <> " }"
+  _ ->
+    "func(" <> paramListText params <> ") " <> typeExprGoText retTy <> " { return " <> genExpr body <> " }"
 
 codegenImport :: ImportDecl -> T.Text
 codegenImport (ImportDecl None path) = "import \"" <> path <> "\"\n"
@@ -158,7 +199,13 @@ codegenHeader (Header (PackageClause pkg) imports) =
 codegenDecl :: Ident -> [Param] -> TypeExpr -> Expr -> T.Text
 codegenDecl (Ident "main") _ _ body = genMainFunc body
 codegenDecl name [] valTy (Sequence exprs) =
-  "var " <> identText name <> " " <> typeExprGoText valTy <> " = func() " <> typeExprGoText valTy <> " {\n"
+  "var "
+    <> identText name
+    <> " "
+    <> typeExprGoText valTy
+    <> " = func() "
+    <> typeExprGoText valTy
+    <> " {\n"
     <> genBody 1 (Sequence exprs)
     <> "}()\n\n"
 codegenDecl name [] valTy body = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> genExpr body <> "\n"

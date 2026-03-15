@@ -1,0 +1,35 @@
+package main
+
+import "fmt"
+
+let classify (n : int) => int =
+  if n < 10 then 0
+  else if n < 100 then
+    if n < 50 then
+      if n < 25 then
+        1
+      else 2
+    else 3
+  else 4
+
+// intentionally formatted terribly to stress if/then/else parser
+let classifyBusted (n : int) => int =
+  if n < 10 then 0
+  else if n < 100
+  then if n < 50 then
+         if n < 25 then
+         1
+         else 2
+        else 3 else 4
+
+let main () => unit =
+  fmt.Println (classify 5)
+  fmt.Println (classify 15)
+  fmt.Println (classify 35)
+  fmt.Println (classify 75)
+  fmt.Println (classify 200)
+  fmt.Println (classifyBusted 5)
+  fmt.Println (classifyBusted 15)
+  fmt.Println (classifyBusted 35)
+  fmt.Println (classifyBusted 75)
+  fmt.Println (classifyBusted 200)

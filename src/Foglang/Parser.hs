@@ -1,4 +1,4 @@
-module Foglang.Parser (isGoLetter, Parser, SC, scn, lexeme, symbol, keyword) where
+module Foglang.Parser (isGoLetter, Parser, SC, scn, keyword) where
 
 import Data.Char (isDigit, isLetter)
 import Data.Text qualified as T
@@ -22,12 +22,6 @@ scn =
     space1
     (L.skipLineComment "//")
     (L.skipBlockComment "/*" "*/")
-
-lexeme :: Parser a -> Parser a
-lexeme parser = L.lexeme scn parser
-
-symbol :: T.Text -> Parser T.Text
-symbol s = L.symbol scn s
 
 keyword :: T.Text -> Parser T.Text
 keyword w = try $ do

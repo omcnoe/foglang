@@ -3,6 +3,9 @@ package main
 import "fmt"
 
 func main() {
-	myDoubler := func(x int) int { return (2 * x) }
-	fmt.Println(myDoubler(2))
+	myDoublerLocal := func(x int) int { return (2 * x) }
+	myDoublerLambda := func(x int) int { return (2 * x) }
+	fmt.Println(myDoublerLocal(2))
+	fmt.Println(myDoublerLambda(2))
+	fmt.Println(func(x int) int { return (2 * x) }(2))
 }
