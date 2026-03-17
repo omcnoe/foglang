@@ -38,11 +38,29 @@ nestedIfFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.f
 nestedIfGoSrc :: T.Text
 nestedIfGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.go")
 
+newtonFogSrc :: T.Text
+newtonFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton.fog")
+
+newtonGoSrc :: T.Text
+newtonGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton.go")
+
 packageLevelFogSrc :: T.Text
 packageLevelFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel.fog")
 
 packageLevelGoSrc :: T.Text
 packageLevelGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel.go")
+
+partialApplicationFogSrc :: T.Text
+partialApplicationFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication.fog")
+
+partialApplicationGoSrc :: T.Text
+partialApplicationGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication.go")
+
+variadicFogSrc :: T.Text
+variadicFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic.fog")
+
+variadicGoSrc :: T.Text
+variadicGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic.go")
 
 spec :: Spec
 spec = describe "programs" $ do
@@ -61,6 +79,15 @@ spec = describe "programs" $ do
   it "nestedif.fog -> nestedif.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "nestedif.fog" nestedIfFogSrc)
       `shouldParseAndCodegenTo` nestedIfGoSrc
+  it "newton.fog -> newton.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "newton.fog" newtonFogSrc)
+      `shouldParseAndCodegenTo` newtonGoSrc
   it "packagelevel.fog -> packagelevel.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "packagelevel.fog" packageLevelFogSrc)
       `shouldParseAndCodegenTo` packageLevelGoSrc
+  it "partialapplication.fog -> partialapplication.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "partialapplication.fog" partialApplicationFogSrc)
+      `shouldParseAndCodegenTo` partialApplicationGoSrc
+  it "variadic.fog -> variadic.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "variadic.fog" variadicFogSrc)
+      `shouldParseAndCodegenTo` variadicGoSrc

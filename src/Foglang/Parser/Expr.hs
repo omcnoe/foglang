@@ -3,54 +3,16 @@ module Foglang.Parser.Expr (exprBlock) where
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Expr (..), Param (..), TypeExpr (..))
+import Foglang.AST (Binding (..), Expr (..))
 import Foglang.Parser (Parser, SC, keyword, scn)
 import Foglang.Parser.FloatLit (floatLit)
 import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
-import Text.Megaparsec (Pos, many, notFollowedBy, optional, sepBy1, some, try, (<|>))
+import Foglang.Parser.Types (params, typeExpr)
+import Text.Megaparsec (Pos, many, notFollowedBy, some, try, (<|>))
 import Text.Megaparsec.Char (string)
 import Text.Megaparsec.Char.Lexer qualified as L (incorrectIndent, indentGuard, indentLevel, lexeme, lineFold, symbol)
-
--- Parse a function parameter: () for unit, or (name : type).
-param :: SC -> Parser Param
-param sc' =
-  (UnitParam <$ L.symbol sc' "()")
-    <|> try
-      ( do
-          _ <- L.symbol sc' "("
-          name <- L.lexeme sc' ident
-          _ <- L.symbol sc' ":"
-          ty <- typeExpr
-          _ <- L.symbol sc' ")"
-          return $ TypedParam name ty
-      )
-
--- Parse a sequence of function parameters (zero or more), with optional '->'
--- separators between consecutive parameters. sc' controls whitespace/newline
--- consumption between tokens (use scn at block level, the linefold sc' inline).
-params :: SC -> Parser [Param]
-params sc' = do
-  firstParam <- optional (param sc')
-  restParams <- case firstParam of
-    Nothing -> return []
-    Just _ -> many $ optional (L.symbol sc' "->") *> param sc'
-  return $ maybe [] (: restParams) firstParam
-
--- Type expression: a named type or a parenthesised function type.
-typeExpr :: Parser TypeExpr
-typeExpr = (NamedType <$> L.lexeme scn ident) <|> funcTypeExpr
-
--- Parenthesised function type: (T1 -> T2 -> ... => Tr).
-funcTypeExpr :: Parser TypeExpr
-funcTypeExpr = do
-  _ <- L.symbol scn "("
-  paramTys <- typeExpr `sepBy1` L.symbol scn "->"
-  _ <- L.symbol scn "=>"
-  retTy <- typeExpr
-  _ <- L.symbol scn ")"
-  return $ FuncType paramTys retTy
 
 -- Entrypoint for all expression parsing, parses a block of one or more expressions.
 exprBlock :: Parser Expr
@@ -97,7 +59,7 @@ letExpr refPos = do
         [x] -> x
         xs -> Sequence xs
 
-  return $ Let name ps typeAnno rhs inExpr
+  return $ Let name (Binding ps typeAnno rhs) inExpr
 
 -- Expression parser parameterised on a space consumer and a block reference
 -- position. sc' controls how far whitespace is consumed between tokens.
@@ -134,15 +96,19 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
         <|> try (IntLit <$> lexeme' intLit)
         <|> try (StrLit <$> lexeme' stringLit)
         <|> try (Var <$> lexeme' qualIdent)
+        <|> try (UnitLit <$ symbol' "()")
         <|> paren
 
     argAtom :: Parser Expr
-    argAtom =
-      try (FloatLit <$> lexeme' floatLit)
-        <|> try (IntLit <$> lexeme' intLit)
-        <|> try (StrLit <$> lexeme' stringLit)
-        <|> try (Var <$> lexeme' qualIdent)
-        <|> paren
+    argAtom = do
+      e <-
+        try (FloatLit <$> lexeme' floatLit)
+          <|> try (IntLit <$> lexeme' intLit)
+          <|> try (StrLit <$> lexeme' stringLit)
+          <|> try (Var <$> lexeme' qualIdent)
+          <|> try (UnitLit <$ lexeme' (string "()"))
+          <|> paren
+      (VariadicSpread e <$ lexeme' (string "...")) <|> pure e
 
     paren :: Parser Expr
     paren = do
@@ -158,7 +124,7 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
       typeAnno <- symbol' "=>" *> typeExpr
       _ <- symbol' "="
       body <- exprWith sc' blockRefPos
-      return $ Lambda ps typeAnno body
+      return $ Lambda (Binding ps typeAnno body)
 
     -- Anchor bodies to the 'if'/'else if'/'else' column to prevent outdenting.
     -- For else-if chains, ifBody is called recursively with the the new anchor,

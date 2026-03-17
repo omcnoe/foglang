@@ -12,7 +12,7 @@ import' = do
   alias <-
     (Dot <$ L.symbol scn ".")
       <|> (toAlias <$> headerIdent)
-      <|> return None
+      <|> return Default
   path <- L.lexeme scn $ do
     _ <- char '"'
     path <- takeWhile1P Nothing (/= '"')

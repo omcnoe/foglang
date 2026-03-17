@@ -5,7 +5,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foglang.AST (Ident (..))
 import Foglang.Parser (Parser, isGoLetter, scn)
-import Text.Megaparsec (satisfy, sepBy1, takeWhileP, try)
+import Text.Megaparsec (many, satisfy, takeWhileP, try)
 import Text.Megaparsec.Char (char)
 import Text.Megaparsec.Char.Lexer qualified as L
 
@@ -55,11 +55,13 @@ ident = try $ do
     else return (Ident raw)
 
 -- Dot-qualified identifier, e.g. "fmt.Println". No spaces around dots.
+-- Uses try on each dot-separator so it doesn't consume '.' then fail on postfix spread operator: "args...".
 -- No trailing whitespace consumed.
 qualIdent :: Parser Ident
 qualIdent = try $ do
-  parts <- ident `sepBy1` char '.'
-  return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) parts
+  first <- ident
+  rest <- many (try (char '.' *> ident))
+  return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) (first : rest)
 
 -- Plain identifier for use in file headers (package names, import aliases).
 headerIdent :: Parser Ident

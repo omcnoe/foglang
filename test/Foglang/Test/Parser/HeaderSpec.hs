@@ -22,13 +22,13 @@ spec = do
         `shouldBe` Right
           ( Header
               (PackageClause "main")
-              [ ImportDecl None "fmt"
-              , ImportDecl None "os"
-              , ImportDecl None "strconv"
+              [ ImportDecl Default "fmt"
+              , ImportDecl Default "os"
+              , ImportDecl Default "strconv"
               , ImportDecl Dot "math/rand"
               , ImportDecl Blank "math/big"
               , ImportDecl (Alias "myalias") "math/complex"
-              , ImportDecl None "math"
+              , ImportDecl Default "math"
               ]
           )
 

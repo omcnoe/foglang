@@ -1,0 +1,17 @@
+package main
+
+import "fmt"
+
+let applyN (f : (float64 => float64)) (n : int) (x : float64) => float64 =
+  if n <= 0 then x
+  else applyN f (n - 1) (f x)
+
+let sqrt (x : float64) => float64 =
+  let improve : (float64 => float64) = func (g : float64) => float64 = (g + x / g) / 2.0
+  applyN improve 50 (x / 2.0)
+
+let main () => unit =
+  fmt.Println (sqrt 2.0)
+  fmt.Println (sqrt 9.0)
+  fmt.Println (sqrt 25.0)
+  fmt.Println (sqrt 144.0)

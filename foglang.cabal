@@ -27,6 +27,7 @@ library
   exposed-modules:
       Foglang.AST
       Foglang.Codegen
+      Foglang.Elaboration
       Foglang.Parser
       Foglang.Parser.Digits
       Foglang.Parser.Expr
@@ -36,6 +37,8 @@ library
       Foglang.Parser.Ident
       Foglang.Parser.IntLit
       Foglang.Parser.StringLit
+      Foglang.Parser.Types
+      Foglang.TAST
   other-modules:
       Paths_foglang
   autogen-modules:

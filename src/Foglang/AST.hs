@@ -5,6 +5,7 @@ module Foglang.AST
     StringLit (..),
     TypeExpr (..),
     Param (..),
+    Binding (..),
     Expr (..),
     PackageClause (..),
     ImportAlias (..),
@@ -18,7 +19,7 @@ import Data.String (IsString (..))
 import Data.Text qualified as T
 
 data Ident = Ident T.Text
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 instance IsString Ident where
   fromString = Ident . T.pack
@@ -40,35 +41,46 @@ newtype StringLit = StringLit T.Text
 
 data TypeExpr
   = NamedType Ident -- named type, e.g. int, float64, bool, unit
-  | FuncType [TypeExpr] TypeExpr -- function type: (T1 -> T2 -> ... => Tr)
+  | SliceType TypeExpr -- slice type, e.g. []int; also the type of a variadic parameter var inside a function body
+  | FuncType [TypeExpr] (Maybe TypeExpr) TypeExpr -- fixed param types, optional variadic param type, return type
   deriving (Eq, Show)
 
 data Param
   = UnitParam -- ()
   | TypedParam Ident TypeExpr -- (name : type)
+  | VariadicParam Ident TypeExpr -- (name : ...type), must be the final param
   deriving (Eq, Show)
 
+-- The common shape of a let-binding and a lambda.
+-- params ([] = value, [...] = function), value/function return type, and rhs.
+data Binding = Binding [Param] TypeExpr Expr
+  deriving (Eq, Show)
+
+-- AST for expressions, directly built from user source code. No name resolution or complete types yet.
+-- Any TypeExpr here is user provided.
 data Expr
   = Var Ident
   | IntLit IntLit
   | FloatLit FloatLit
   | StrLit StringLit
-  | Let Ident [Param] TypeExpr Expr Expr -- name, params, type annotation, rhs, inExpr
-  | Lambda [Param] TypeExpr Expr -- params, return type annotation, body
+  | UnitLit -- the () literal; not a function call, just the unit value
+  | Let Ident Binding Expr -- name, binding, inExpr
+  | Lambda Binding -- anonymous "binding" (no name, no inExpr)
   | If Expr Expr Expr
   | BinaryOp Expr T.Text Expr
   | Application Expr [Expr]
   | Sequence [Expr]
+  | VariadicSpread Expr -- expr... unpacks []T into a variadic slot at a call site
   deriving (Eq, Show)
 
 newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
 data ImportAlias
-  = None -- qualified by package name
-  | Alias Ident
-  | Dot -- without qualifiers (dangerous)
-  | Blank -- side effects only
+  = Default -- import qualified by package name (e.g. import "fmt" -> fmt.Println)
+  | Alias Ident -- import with custom qualifier (e.g. import f "fmt" -> f.Println)
+  | Dot -- import without qualifier (dangerous) (e.g. import . "fmt" -> Println)
+  | Blank -- import for side effects only (e.g. import _ "net/http/pprof")
   deriving (Eq, Show)
 
 data ImportDecl = ImportDecl ImportAlias T.Text
