@@ -9,58 +9,58 @@ import Test.Hspec (Spec, describe, it)
 import Text.Megaparsec (eof, parse)
 
 fibonacciFogSrc :: T.Text
-fibonacciFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/fibonacci.fog")
+fibonacciFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/fibonacci/fibonacci.fog")
 
 fibonacciGoSrc :: T.Text
-fibonacciGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/fibonacci.go")
+fibonacciGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/fibonacci/fibonacci.go")
 
 helloWorldFogSrc :: T.Text
-helloWorldFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/helloworld.fog")
+helloWorldFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/helloworld/helloworld.fog")
 
 helloWorldGoSrc :: T.Text
-helloWorldGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/helloworld.go")
+helloWorldGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/helloworld/helloworld.go")
 
 lambdaFogSrc :: T.Text
-lambdaFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/lambda.fog")
+lambdaFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/lambda/lambda.fog")
 
 lambdaGoSrc :: T.Text
-lambdaGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/lambda.go")
+lambdaGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/lambda/lambda.go")
 
 leapYearFogSrc :: T.Text
-leapYearFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear.fog")
+leapYearFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear/leapyear.fog")
 
 leapYearGoSrc :: T.Text
-leapYearGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear.go")
+leapYearGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/leapyear/leapyear.go")
 
 nestedIfFogSrc :: T.Text
-nestedIfFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.fog")
+nestedIfFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif/nestedif.fog")
 
 nestedIfGoSrc :: T.Text
-nestedIfGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif.go")
+nestedIfGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/nestedif/nestedif.go")
 
 newtonFogSrc :: T.Text
-newtonFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton.fog")
+newtonFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton/newton.fog")
 
 newtonGoSrc :: T.Text
-newtonGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton.go")
+newtonGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/newton/newton.go")
 
 packageLevelFogSrc :: T.Text
-packageLevelFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel.fog")
+packageLevelFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel/packagelevel.fog")
 
 packageLevelGoSrc :: T.Text
-packageLevelGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel.go")
+packageLevelGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/packagelevel/packagelevel.go")
 
 partialApplicationFogSrc :: T.Text
-partialApplicationFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication.fog")
+partialApplicationFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication/partialapplication.fog")
 
 partialApplicationGoSrc :: T.Text
-partialApplicationGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication.go")
+partialApplicationGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication/partialapplication.go")
 
 variadicFogSrc :: T.Text
-variadicFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic.fog")
+variadicFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic/variadic.fog")
 
 variadicGoSrc :: T.Text
-variadicGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic.go")
+variadicGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic/variadic.go")
 
 spec :: Spec
 spec = describe "programs" $ do
