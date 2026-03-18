@@ -5,3 +5,5 @@
 * Extend type system — type checking / inference pass
 * Package/module design — how foglang's module system maps to Go's
 * Conforming string literal syntax
+* Language server (LSP) — go-to-def, type info, diagnostics; requires holding elab results in memory and implementing the LSP protocol
+* Codegen: hoist if/else out of expression context into declare-then-assign to avoid IIFEs wherever possible

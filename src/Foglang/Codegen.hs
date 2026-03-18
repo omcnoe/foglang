@@ -116,14 +116,14 @@ genBody ReturnLast indent (TSequence _ texprs)
   | otherwise =
       T.concat (map (genBody StmtOnly indent) (init texprs))
         <> genBody ReturnLast indent (last texprs)
-genBody mode indent (TLet _ name (TBinding [] _ trhs) tin)
-  | tExprType trhs == NamedType (Ident "()"),
+genBody mode indent (TLet _ name (TBinding [] retTy trhs) tin)
+  | retTy == NamedType (Ident "()") || tExprType trhs == NamedType (Ident "()"),
     name == Ident "_" =
       ind indent
         <> genTExpr trhs
         <> "\n"
         <> genBody mode indent tin
-  | tExprType trhs == NamedType (Ident "()") =
+  | retTy == NamedType (Ident "()") || tExprType trhs == NamedType (Ident "()") =
       ind indent
         <> genTExpr trhs
         <> "\n"
@@ -145,7 +145,8 @@ genBody mode indent (TLet _ name (TBinding params retTy trhs) tin) =
     <> genLocalFunc indent (paramListGoText params) retTy trhs
     <> "\n"
     <> genBody mode indent tin
-genBody StmtOnly indent te = ind indent <> genTExpr te <> "\n"
+genBody StmtOnly indent te@(TApplication _ _ _) = ind indent <> genTExpr te <> "\n"
+genBody StmtOnly indent te = ind indent <> "_ = " <> genTExpr te <> "\n"
 genBody ReturnLast indent te = ind indent <> "return " <> genTExpr te <> "\n"
 
 genTBody :: Int -> TExpr -> T.Text
@@ -230,8 +231,8 @@ genTExpr (TApplication _ tf targs) =
                       allArgs = map genTExpr (take nFixed targs) ++ map genTExpr varArgs
                    in genTExpr tf <> "(" <> T.intercalate ", " allArgs <> ")"
     _ -> genTExpr tf <> "(" <> T.intercalate ", " (map genTExpr targs) <> ")"
-genTExpr (TIf _ cond then' else') =
-  "func() any { if " <> genTExpr cond <> " { return " <> genTExpr then' <> " }; return " <> genTExpr else' <> " }()"
+genTExpr (TIf ty cond then' else') =
+  "func() " <> typeExprGoText ty <> " { if " <> genTExpr cond <> " { return " <> genTExpr then' <> " }; return " <> genTExpr else' <> " }()"
 genTExpr (TSequence _ []) = "struct{}{}"
 genTExpr (TSequence _ texprs) =
   "func() any { "

@@ -56,6 +56,12 @@ partialApplicationFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/
 partialApplicationGoSrc :: T.Text
 partialApplicationGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/partialapplication/partialapplication.go")
 
+stmtExprFogSrc :: T.Text
+stmtExprFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/stmtexpr/stmtexpr.fog")
+
+stmtExprGoSrc :: T.Text
+stmtExprGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/stmtexpr/stmtexpr.go")
+
 variadicFogSrc :: T.Text
 variadicFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic/variadic.fog")
 
@@ -67,6 +73,7 @@ unitFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.fog"
 
 unitGoSrc :: T.Text
 unitGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.go")
+
 
 spec :: Spec
 spec = describe "programs" $ do
@@ -94,6 +101,9 @@ spec = describe "programs" $ do
   it "partialapplication.fog -> partialapplication.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "partialapplication.fog" partialApplicationFogSrc)
       `shouldParseAndCodegenTo` partialApplicationGoSrc
+  it "stmtexpr.fog -> stmtexpr.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "stmtexpr.fog" stmtExprFogSrc)
+      `shouldParseAndCodegenTo` stmtExprGoSrc
   it "variadic.fog -> variadic.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "variadic.fog" variadicFogSrc)
       `shouldParseAndCodegenTo` variadicGoSrc

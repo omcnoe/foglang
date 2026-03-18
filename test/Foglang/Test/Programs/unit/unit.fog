@@ -65,7 +65,6 @@ let unitReturnCoercedToStructI : (int => struct{}) = printInt
 // Coerce (int => struct{}) to (int => ())
 let structReturnCoercedToUnitI : (int => ()) = intToStruct
 
-
 // Multi-() params: each () becomes struct{} (no zero-param rewrite)
 let multiUnitParams () -> () -> () => () =
   fmt.Println "multi unit params"
