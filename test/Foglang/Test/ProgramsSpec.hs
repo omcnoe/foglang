@@ -74,6 +74,23 @@ unitFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.fog"
 unitGoSrc :: T.Text
 unitGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.go")
 
+slicesFogSrc :: T.Text
+slicesFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/slices/slices.fog")
+
+slicesGoSrc :: T.Text
+slicesGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/slices/slices.go")
+
+patternsFogSrc :: T.Text
+patternsFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/patterns/patterns.fog")
+
+patternsGoSrc :: T.Text
+patternsGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/patterns/patterns.go")
+
+primesFogSrc :: T.Text
+primesFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/primes/primes.fog")
+
+primesGoSrc :: T.Text
+primesGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/primes/primes.go")
 
 spec :: Spec
 spec = describe "programs" $ do
@@ -110,3 +127,12 @@ spec = describe "programs" $ do
   it "unit.fog -> unit.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "unit.fog" unitFogSrc)
       `shouldParseAndCodegenTo` unitGoSrc
+  it "slices.fog -> slices.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "slices.fog" slicesFogSrc)
+      `shouldParseAndCodegenTo` slicesGoSrc
+  it "patterns.fog -> patterns.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "patterns.fog" patternsFogSrc)
+      `shouldParseAndCodegenTo` patternsGoSrc
+  it "primes.fog -> primes.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "primes.fog" primesFogSrc)
+      `shouldParseAndCodegenTo` primesGoSrc

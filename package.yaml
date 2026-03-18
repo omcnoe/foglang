@@ -54,6 +54,8 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - foglang
+    default-extensions:
+    - ImportQualifiedPost
 
 tests:
   foglang-test:
