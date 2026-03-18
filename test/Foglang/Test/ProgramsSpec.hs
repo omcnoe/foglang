@@ -62,6 +62,12 @@ variadicFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic/v
 variadicGoSrc :: T.Text
 variadicGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/variadic/variadic.go")
 
+unitFogSrc :: T.Text
+unitFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.fog")
+
+unitGoSrc :: T.Text
+unitGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/unit/unit.go")
+
 spec :: Spec
 spec = describe "programs" $ do
   it "fibonacci.fog -> fibonacci.go" $
@@ -91,3 +97,6 @@ spec = describe "programs" $ do
   it "variadic.fog -> variadic.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "variadic.fog" variadicFogSrc)
       `shouldParseAndCodegenTo` variadicGoSrc
+  it "unit.fog -> unit.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "unit.fog" unitFogSrc)
+      `shouldParseAndCodegenTo` unitGoSrc

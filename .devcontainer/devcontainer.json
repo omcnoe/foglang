@@ -2,6 +2,8 @@
 	"name": "Foglang",
 	"image": "mcr.microsoft.com/devcontainers/go:2-1.25-trixie",
 	"features": {
-		"ghcr.io/devcontainers-extra/features/haskell:2": {}
+		"ghcr.io/devcontainers/features/sshd:1": {},
+		"ghcr.io/devcontainers-extra/features/haskell:2": {},
+		"ghcr.io/stu-bell/devcontainer-features/claude-code:0": {}
 	}
 }

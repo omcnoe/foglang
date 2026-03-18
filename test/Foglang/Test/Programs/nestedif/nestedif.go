@@ -3,11 +3,11 @@ package main
 import "fmt"
 
 func classify(n int) int {
-	if (n < 10) {
+	if n < 10 {
 		return 0
-	} else if (n < 100) {
-		if (n < 50) {
-			if (n < 25) {
+	} else if n < 100 {
+		if n < 50 {
+			if n < 25 {
 				return 1
 			} else {
 				return 2
@@ -19,13 +19,12 @@ func classify(n int) int {
 		return 4
 	}
 }
-
 func classifyBusted(n int) int {
-	if (n < 10) {
+	if n < 10 {
 		return 0
-	} else if (n < 100) {
-		if (n < 50) {
-			if (n < 25) {
+	} else if n < 100 {
+		if n < 50 {
+			if n < 25 {
 				return 1
 			} else {
 				return 2
@@ -37,7 +36,6 @@ func classifyBusted(n int) int {
 		return 4
 	}
 }
-
 func main() {
 	fmt.Println(classify(5))
 	fmt.Println(classify(15))

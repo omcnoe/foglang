@@ -2,7 +2,7 @@ package main
 
 import "fmt"
 
-let main () => unit =
+let main () => () =
   let myDoublerLocal (x : int) => int = 2 * x
   let myDoublerLambda : (int => int) = func (x : int) => int = 2 * x
 

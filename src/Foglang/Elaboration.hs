@@ -11,18 +11,26 @@ type Env = Map.Map Ident TypeExpr
 data ElabError
   = UnknownVariable Ident
   | NotAFunction TypeExpr
-  | MissingSpread TypeExpr    -- bare SliceType value in variadic slot without ...
-  | InvalidSpread TypeExpr     -- ... applied to a non-SliceType value
+  | MissingSpread TypeExpr -- bare SliceType value in variadic slot without ...
+  | InvalidSpread TypeExpr -- ... applied to a non-SliceType value
+  | NamedUnitParam Ident -- (x : ()) is invalid; use (x : struct{}) instead
   deriving (Eq, Show)
 
 -- Build the full type for a let-binding given its params and declared return type.
 -- For value bindings (empty params), returns retTy directly.
--- For function bindings, constructs a FuncType with an explicit optional variadic slot.
+-- A sole anonymous UnitParam is a zero-param rewrite: FuncType [] Nothing retTy.
+-- In any other combination, each UnitParam contributes struct{} to fixedTys.
 letBindingType :: [Param] -> TypeExpr -> TypeExpr
 letBindingType [] retTy = retTy -- non-function value
+letBindingType [UnitParam] retTy = FuncType [] Nothing retTy -- zero-param rewrite
 letBindingType ps retTy = FuncType fixedTys mVarTy retTy
   where
-    fixedTys = [ty | TypedParam _ ty <- ps]
+    isVariadic (VariadicParam _ _) = True
+    isVariadic _ = False
+    toFixedTy UnitParam = NamedType (Ident "()")
+    toFixedTy (TypedParam _ ty) = ty
+    toFixedTy (VariadicParam _ _) = error "letBindingType: impossible"
+    fixedTys = map toFixedTy (filter (not . isVariadic) ps)
     mVarTy = case reverse ps of
       (VariadicParam _ ty : _) -> Just ty
       _ -> Nothing
@@ -36,11 +44,11 @@ applyType (FuncType fixed mVar ret) n =
   case mVar of
     Nothing
       | n >= length fixed -> Right ret
-      | otherwise         -> Right (FuncType (drop n fixed) Nothing ret)
+      | otherwise -> Right (FuncType (drop n fixed) Nothing ret)
     Just varTy
-      | n > length fixed  -> Right ret
+      | n > length fixed -> Right ret
       | n == length fixed -> Right (FuncType [] (Just varTy) ret)
-      | otherwise         -> Right (FuncType (drop n fixed) (Just varTy) ret)
+      | otherwise -> Right (FuncType (drop n fixed) (Just varTy) ret)
 applyType (NamedType (Ident "opaque")) _ = Right (NamedType (Ident "opaque"))
 applyType t _ = Left (NotAFunction t)
 
@@ -58,6 +66,14 @@ preludeEnv =
     [ (Ident "true", NamedType (Ident "bool")),
       (Ident "false", NamedType (Ident "bool"))
     ]
+
+-- Reject named unit params (name : ())
+-- () as a named param type has no representable function type due to zero-param
+-- rewrite. Use (name : struct{}) instead.
+checkNoNamedUnitParams :: [Param] -> Either ElabError ()
+checkNoNamedUnitParams [] = Right ()
+checkNoNamedUnitParams (TypedParam name (NamedType (Ident "()")) : _) = Left (NamedUnitParam name)
+checkNoNamedUnitParams (_ : rest) = checkNoNamedUnitParams rest
 
 -- Elaborate an expression in the given environment, producing a TExpr.
 elabExpr :: Env -> Expr -> Either ElabError TExpr
@@ -92,21 +108,25 @@ elabExpr env (If cond then' else') = do
 elabExpr env (Sequence exprs) = do
   texprs <- mapM (elabExpr env) exprs
   let ty = case texprs of
-        [] -> NamedType (Ident "unit")
+        [] -> NamedType (Ident "()")
         _ -> tExprType (last texprs)
   Right (TSequence ty texprs)
 elabExpr env (Lambda (Binding params retTy body)) = do
-  let paramEnv = Map.fromList $
-        [(name, ty) | TypedParam name ty <- params] ++
-        [(name, SliceType ty) | VariadicParam name ty <- params]
+  checkNoNamedUnitParams params
+  let paramEnv =
+        Map.fromList $
+          [(name, ty) | TypedParam name ty <- params]
+            ++ [(name, SliceType ty) | VariadicParam name ty <- params]
   tbody <- elabExpr (Map.union paramEnv env) body
   Right (TLambda (letBindingType params retTy) (TBinding params retTy tbody))
 elabExpr env (Let name (Binding params retTy rhs) inExpr) = do
+  checkNoNamedUnitParams params
   let bindingTy = letBindingType params retTy
   let envWithSelf = Map.insert name bindingTy env
-  let paramEnv = Map.fromList $
-        [(n, ty) | TypedParam n ty <- params] ++
-        [(n, SliceType ty) | VariadicParam n ty <- params]
+  let paramEnv =
+        Map.fromList $
+          [(n, ty) | TypedParam n ty <- params]
+            ++ [(n, SliceType ty) | VariadicParam n ty <- params]
   trhs <- elabExpr (Map.union paramEnv envWithSelf) rhs
   tin <- elabExpr envWithSelf inExpr
   Right (TLet (tExprType tin) name (TBinding params retTy trhs) tin)
@@ -136,7 +156,7 @@ elabExpr env (Application f args) = do
           -- are not yet supported in the parser.
           case filter isBareVariadic varArgs of
             (ba : _) -> Left (MissingSpread (tExprType ba))
-            []       -> pure ()
+            [] -> pure ()
         else pure ()
     Nothing -> pure ()
   resultTy <- applyType (tExprType tf) (length targs)

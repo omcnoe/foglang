@@ -13,7 +13,7 @@ let offset : int =
   fmt.Println "Computing offset"
   25
 
-let main () => unit =
+let main () => () =
   fmt.Println base
   fmt.Println offset
   fmt.Println (base + offset)

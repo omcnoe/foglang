@@ -7,6 +7,6 @@ let isLeapYear (year : int) => bool =
   else if year % 100 == 0 then false
   else year % 4 == 0
 
-let main () => unit =
+let main () => () =
   fmt.Println(isLeapYear 2000)
   fmt.Println(isLeapYear 2004)

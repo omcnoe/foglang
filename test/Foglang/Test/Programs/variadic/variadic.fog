@@ -3,13 +3,13 @@ package main
 import "fmt"
 
 // printf wraps fmt.Printf, demonstrating a variadic function definition.
-let printf (format : string) (args : ...any) => unit =
+let printf (format : string) (args : ...any) => () =
   fmt.Printf format args...
 
-let main () => unit =
+let main () => () =
   printf "hello, world!\n" ()
   printf "%d + %d = %d\n" 1 2 3
   // partial application of fixed params works naturally
-  let printInt : (...any => unit) = printf "%d\n"
+  let printInt : (...any => ()) = printf "%d\n"
   printInt 42
   printInt () // runtime error, will print "%!d(MISSING)"

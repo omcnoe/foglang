@@ -5,7 +5,6 @@ import "fmt"
 func printf(format string, args ...any) {
 	fmt.Printf(format, args...)
 }
-
 func main() {
 	printf("hello, world!\n")
 	printf("%d + %d = %d\n", 1, 2, 3)

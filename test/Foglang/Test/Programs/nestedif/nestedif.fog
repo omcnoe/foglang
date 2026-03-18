@@ -22,7 +22,7 @@ let classifyBusted (n : int) => int =
          else 2
         else 3 else 4
 
-let main () => unit =
+let main () => () =
   fmt.Println (classify 5)
   fmt.Println (classify 15)
   fmt.Println (classify 35)

@@ -6,5 +6,5 @@ let fib (n : int) => int =
   if n <= 1 then n
   else fib (n - 1) + fib (n - 2)
 
-let main () => unit =
+let main () => () =
   fmt.Println (fib 10)

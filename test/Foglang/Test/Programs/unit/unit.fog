@@ -1,0 +1,99 @@
+package main
+
+import "fmt"
+
+// zero-param, zero-return
+let zeroParam () => () =
+  fmt.Println "zero param, zero return"
+
+// struct{} param, zero return
+let structArg (x : struct{}) => () =
+  fmt.Println "struct arg, zero return"
+
+// Bind zero-return result (synthesises struct{}{} value)
+let bindAndPass () => () =
+  let x : () = zeroParam ()
+  structArg x
+
+// () literal passed to struct{} param (coercion at call site)
+let passDirect () => () =
+  structArg ()
+
+// Zero-param with struct{} return
+let zeroParamStruct () => struct{} = ()
+
+// Bind struct{} result, pass to struct{} param
+let bindStructResult () => () =
+  let s : struct{} = zeroParamStruct ()
+  structArg s
+
+// Higher-order: (struct{} => ()) callback
+let applyStruct (f : (struct{} => ())) => () =
+  f ()
+
+let withStructCallback () => () =
+  applyStruct (func (x : struct{}) => () = fmt.Println "callback")
+
+let withNamedStructCallback () => () =
+  applyStruct structArg
+
+// Higher-order: (() => ()) callback (zero-param)
+let applyZero (f : (() => ())) => () =
+  f ()
+
+let withZeroCallback () => () =
+  applyZero (func () => () = fmt.Println "zero callback")
+
+let withNamedZeroCallback () => () =
+  applyZero zeroParam
+
+// Coerce (() => ()) to (() => struct{})
+let unitReturnCoercedToStruct : (() => struct{}) = zeroParam
+
+// Coerce (() => struct{}) to (() => ())
+let structReturnCoercedToUnit : (() => ()) = zeroParamStruct
+
+// Multi-param coercion helpers
+let printInt (n : int) => () =
+  fmt.Println n
+
+let intToStruct (n : int) => struct{} = ()
+
+// Coerce (int => ()) to (int => struct{})
+let unitReturnCoercedToStructI : (int => struct{}) = printInt
+
+// Coerce (int => struct{}) to (int => ())
+let structReturnCoercedToUnitI : (int => ()) = intToStruct
+
+
+// Multi-() params: each () becomes struct{} (no zero-param rewrite)
+let multiUnitParams () -> () -> () => () =
+  fmt.Println "multi unit params"
+
+// Function type with multiple () params
+let applyMultiUnit (f : (() -> () -> () => ())) => () =
+  f () () ()
+
+// let in expression context with unit-typed RHS (tests genTExpr TLet)
+let discardUnit : int =
+  let _ : () = zeroParam ()
+  42
+
+let main () => () =
+  zeroParam ()
+  structArg ()
+  bindAndPass ()
+  passDirect ()
+  zeroParamStruct ()
+  bindStructResult ()
+  withStructCallback ()
+  withNamedStructCallback ()
+  withZeroCallback ()
+  withNamedZeroCallback ()
+  unitReturnCoercedToStruct ()
+  structReturnCoercedToUnit ()
+  unitReturnCoercedToStructI 1
+  structReturnCoercedToUnitI 2
+  multiUnitParams () () ()
+  applyMultiUnit multiUnitParams
+  fmt.Println discardUnit
