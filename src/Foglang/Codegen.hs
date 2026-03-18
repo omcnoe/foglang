@@ -234,8 +234,8 @@ genTExpr (TApplication _ tf targs) =
 genTExpr (TIf ty cond then' else') =
   "func() " <> typeExprGoText ty <> " { if " <> genTExpr cond <> " { return " <> genTExpr then' <> " }; return " <> genTExpr else' <> " }()"
 genTExpr (TSequence _ []) = "struct{}{}"
-genTExpr (TSequence _ texprs) =
-  "func() any { "
+genTExpr (TSequence ty texprs) =
+  "func() " <> typeExprGoText ty <> " { "
     <> T.intercalate "; " (map genTExpr (init texprs))
     <> "; return "
     <> genTExpr (last texprs)
@@ -298,6 +298,8 @@ genTExpr (TLet ty name (TBinding params retTy trhs) tin) =
     outerReturnKw = case ty of
       NamedType (Ident "()") -> ""
       _ -> "return "
+genTExpr (TLambda _ (TBinding params retTy tbody@(TSequence _ _))) =
+  genLocalFunc 0 (paramListGoText params) retTy tbody
 genTExpr (TLambda _ (TBinding params retTy tbody)) = case retTy of
   NamedType (Ident "()") ->
     "func(" <> paramListGoText params <> ") { " <> genTExpr tbody <> " }"

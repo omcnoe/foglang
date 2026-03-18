@@ -6,6 +6,11 @@ let main () => () =
   let myDoublerLocal (x : int) => int = 2 * x
   let myDoublerLambda : (int => int) = func (x : int) => int = 2 * x
 
+  let multiLineLambda : (int => int) = func (x : int) => int =
+    fmt.Println "doubling"
+    x * 2
+
   fmt.Println (myDoublerLocal 2)
   fmt.Println (myDoublerLambda 2)
-  fmt.Println ((func (x : int) => int = 2 * x) 2)
+  fmt.Println ((func (x : int) => int = 2 * x) 2) // anonymous lambda
+  fmt.Println (multiLineLambda 5)

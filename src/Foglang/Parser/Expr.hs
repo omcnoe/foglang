@@ -10,20 +10,23 @@ import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
 import Foglang.Parser.Types (params, typeExpr)
-import Text.Megaparsec (Pos, many, notFollowedBy, some, try, (<|>))
+import Text.Megaparsec (Pos, SourcePos (..), getSourcePos, many, notFollowedBy, some, try, (<|>))
 import Text.Megaparsec.Char (string)
 import Text.Megaparsec.Char.Lexer qualified as L (incorrectIndent, indentGuard, indentLevel, lexeme, lineFold, symbol)
 
--- Entrypoint for all expression parsing, parses a block of one or more expressions.
-exprBlock :: Parser Expr
-exprBlock = do
+-- Core block parser without trailing whitespace consumption.
+exprBlockItems :: Parser Expr
+exprBlockItems = do
   refPos <- L.indentLevel
   e <- exprBlockItem refPos
   es <- many (try $ L.indentGuard scn EQ refPos *> exprBlockItem refPos)
-  _ <- scn
   return $ case (e : es) of
     [x] -> x
     xs -> Sequence xs
+
+-- Entrypoint for all expression parsing, parses a block of one or more expressions.
+exprBlock :: Parser Expr
+exprBlock = exprBlockItems <* scn
 
 -- An expression block item is either:
 -- a let binding (which absorbs any subsequent indented expression block)
@@ -123,8 +126,20 @@ exprWith sc' blockRefPos = makeExprParser atom operatorTable
       ps <- params sc'
       typeAnno <- symbol' "=>" *> typeExpr
       _ <- symbol' "="
-      body <- exprWith sc' blockRefPos
+      -- Body on next line: parse as indented block (like letExpr).
+      -- Uses exprBlockItems (no trailing scn) to avoid consuming whitespace
+      -- past the body that belongs to the enclosing line fold context.
+      -- Body on same line: parse as single inline expression.
+      body <- indentedBody <|> exprWith sc' blockRefPos
       return $ Lambda (Binding ps typeAnno body)
+
+    indentedBody :: Parser Expr
+    indentedBody = try $ do
+      lineBefore <- sourceLine <$> getSourcePos
+      scn
+      lineAfter <- sourceLine <$> getSourcePos
+      when (lineAfter == lineBefore) $ fail "body on same line"
+      exprBlockItems
 
     -- Anchor bodies to the 'if'/'else if'/'else' column to prevent outdenting.
     -- For else-if chains, ifBody is called recursively with the the new anchor,
