@@ -1,0 +1,27 @@
+{
+  "name": "foglang",
+  "displayName": "Fog",
+  "description": "Syntax highlighting for the Fog programming language",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "fog",
+        "aliases": ["Fog", "fog"],
+        "extensions": [".fog"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fog",
+        "scopeName": "source.fog",
+        "path": "./syntaxes/fog.tmLanguage.json"
+      }
+    ]
+  }
+}

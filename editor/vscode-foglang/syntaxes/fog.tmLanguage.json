@@ -1,0 +1,113 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Fog",
+  "scopeName": "source.fog",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#package" },
+    { "include": "#import" },
+    { "include": "#let-binding" },
+    { "include": "#keyword" },
+    { "include": "#type" },
+    { "include": "#float" },
+    { "include": "#integer" },
+    { "include": "#operator" },
+    { "include": "#qualified-ident" },
+    { "include": "#ident" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.double-slash.fog",
+      "match": "//.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.fog",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.fog",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "package": {
+      "match": "\\b(package)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.package.fog" },
+        "2": { "name": "entity.name.namespace.fog" }
+      }
+    },
+    "import": {
+      "match": "\\b(import)\\b",
+      "name": "keyword.control.import.fog"
+    },
+    "let-binding": {
+      "match": "\\b(let)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.fog" },
+        "2": { "name": "entity.name.function.fog" }
+      }
+    },
+    "keyword": {
+      "match": "\\b(if|then|else|func|true|false)\\b",
+      "name": "keyword.control.fog"
+    },
+    "type": {
+      "patterns": [
+        {
+          "match": "struct\\{\\}",
+          "name": "support.type.fog"
+        },
+        {
+          "match": "\\(\\)",
+          "name": "support.type.fog"
+        },
+        {
+          "match": "\\b(int|float64|bool|string|any)\\b",
+          "name": "support.type.fog"
+        }
+      ]
+    },
+    "float": {
+      "name": "constant.numeric.float.fog",
+      "match": "\\b[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9][0-9_]*)\\b|\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b|\\b0[xX][0-9a-fA-F][0-9a-fA-F_]*(\\.[0-9a-fA-F][0-9a-fA-F_]*)?[pP][+-]?[0-9][0-9_]*\\b"
+    },
+    "integer": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.fog",
+          "match": "\\b0[xX][0-9a-fA-F][0-9a-fA-F_]*\\b"
+        },
+        {
+          "name": "constant.numeric.octal.fog",
+          "match": "\\b0[oO][0-7][0-7_]*\\b"
+        },
+        {
+          "name": "constant.numeric.binary.fog",
+          "match": "\\b0[bB][01][01_]*\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.fog",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "operator": {
+      "match": "=>|->|\\.\\.\\.|==|!=|>=|<=|&&|\\|\\||[+\\-*/%<>!&|^]",
+      "name": "keyword.operator.fog"
+    },
+    "qualified-ident": {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "entity.name.namespace.fog" },
+        "2": { "name": "entity.name.function.fog" }
+      }
+    },
+    "ident": {
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+      "name": "variable.other.fog"
+    }
+  }
+}
