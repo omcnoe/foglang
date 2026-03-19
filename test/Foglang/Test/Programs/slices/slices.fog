@@ -1,0 +1,18 @@
+package main
+
+import "fmt"
+
+// slice literals, len, indexing, cons
+let printLen (xs : []int) => () =
+  fmt.Println (len xs)
+
+let getIndex (xs : []int) (i : int) => () =
+  fmt.Println xs[i]
+
+let main () => () =
+  let xs : []int = [10, 20, 30]
+  printLen xs
+  getIndex xs 0
+  getIndex xs 2
+  fmt.Println (0 :: xs)
+  fmt.Println []

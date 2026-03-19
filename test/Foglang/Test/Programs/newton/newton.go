@@ -11,6 +11,7 @@ func applyN(f func(float64) float64, n int, x float64) float64 {
 }
 func sqrt(x float64) float64 {
 	improve := func(g float64) float64 { return ((g + (x / g)) / 2.0) }
+	_ = improve
 	return applyN(improve, 50, (x / 2.0))
 }
 func main() {

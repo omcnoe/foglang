@@ -11,6 +11,7 @@ func structArg(x struct{}) {
 func bindAndPass() {
 	zeroParam()
 	x := struct{}{}
+	_ = x
 	structArg(x)
 }
 func passDirect() {
@@ -21,6 +22,7 @@ func zeroParamStruct() struct{} {
 }
 func bindStructResult() {
 	s := zeroParamStruct()
+	_ = s
 	structArg(s)
 }
 func applyStruct(f func(struct{})) {

@@ -20,7 +20,9 @@ func printSign(x int) {
 }
 func letExpr(x int) int {
 	a := (x + 1)
+	_ = a
 	b := (a * 2)
+	_ = b
 	return (a + b)
 }
 func letUnitThenValue(x int) int {
@@ -47,9 +49,11 @@ func stmtsThenExpr(x int) int {
 	return x
 }
 func localFuncUse() {
-	double := func(n int) int {
+	var double func(n int) int
+	double = func(n int) int {
 		return (n * 2)
 	}
+	_ = double
 	fmt.Println(double(21))
 }
 func applyToTen(f func(int) int) int {
@@ -79,7 +83,7 @@ var condVar int = func() int {
 	}
 	return 0
 }()
-var letVar int = func() int { x := 10; return (x + 5) }()
+var letVar int = func() int { x := 10; _ = x; return (x + 5) }()
 var computed int = func() int {
 	fmt.Println("computing global")
 	return 42
@@ -92,10 +96,12 @@ func ifInLet(x int) int {
 		}
 		return 1
 	}()
+	_ = sign
 	return (x * sign)
 }
 func lambdaInLet() {
 	f := func(x int) int { return (x * x) }
+	_ = f
 	fmt.Println(f(7))
 }
 func constVal() int {

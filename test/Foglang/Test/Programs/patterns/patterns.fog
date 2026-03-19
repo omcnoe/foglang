@@ -1,0 +1,75 @@
+package main
+
+import "fmt"
+
+// Simple match on int
+let describe (x : int) => string =
+  match x with
+    | 0 => "zero"
+    | 1 => "one"
+    | _ => "other"
+
+// Match as body of a let, with sibling lets, and sibling matches
+let testSiblings (x : int) => int =
+  let double (n : int) => int =
+    match n with
+      | 0 => 0
+      | _ => n * 2
+
+  let triple (n : int) => int =
+    match n with
+      | 0 => 0
+      | _ => n * 3
+
+  let quadruple (n : int) => int =
+    match n with
+      | 0 => 0
+      | _ => n * 4
+
+  match x with
+    | 0 => fmt.Println "x is zero"
+    | 1 => fmt.Println "x is one"
+    | _ => fmt.Println "x is nonzero"
+
+  let result : int = double x + triple x + quadruple x
+  result
+
+// Reproduces complex primes.fog match structure: else-match with cons patterns,
+// nested match inside arm, sibling lets with matches, multi-line lambda
+let first (x : int) => int =
+  let a (n : int) => int =
+    match n with
+      | 0 => 0
+      | _ => n * 2
+
+  let b (n : int) => int =
+    match n with
+      | 0 => 0
+      | _ => n * 3
+
+  let inner (candidates : []int) => int =
+    if 1 == 0 then 0
+    else match candidates with
+      | [] => 0
+      | x :: rest =>
+        match x with
+          | 0 =>
+            a x
+          | _ =>
+            let r : int = b x
+            r
+  inner [x]
+
+// Top-level function after function containing complex match nesting
+let second (x : int) => int =
+  match x with
+    | 0 => 0
+    | _ => x * 3
+
+let main () => () =
+  fmt.Println (describe 0)
+  fmt.Println (describe 1)
+  fmt.Println (describe 42)
+  fmt.Println (testSiblings 5)
+  fmt.Println (first 3)
+  fmt.Println (second 4)

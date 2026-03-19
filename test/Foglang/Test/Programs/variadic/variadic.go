@@ -9,6 +9,7 @@ func main() {
 	printf("hello, world!\n")
 	printf("%d + %d = %d\n", 1, 2, 3)
 	printInt := func(_args ...any) { printf("%d\n", _args...) }
+	_ = printInt
 	printInt(42)
 	printInt()
 }

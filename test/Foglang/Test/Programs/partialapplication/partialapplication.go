@@ -7,6 +7,7 @@ func add(a int, b int) int {
 }
 func main() {
 	add5 := func(_p0 int) int { return add(5, _p0) }
+	_ = add5
 	fmt.Println(add5(3))
 	fmt.Println(add5(10))
 	fmt.Println(add(2, 3))
