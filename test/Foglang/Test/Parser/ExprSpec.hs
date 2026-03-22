@@ -2,27 +2,29 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), FloatLit (..), IntLit (..), Param (..), TypeExpr (..))
-import Foglang.Parser.Expr (exprBlock)
+import Foglang.Parser (scn)
+import Foglang.Parser.Expr (sequence')
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, parse)
+import Text.Megaparsec.Pos (mkPos)
 
 spec :: Spec
 spec = do
-  let validLet =
-        [ ("let x : int = 1", Let "x" (Binding [] (NamedType "int") (IntLit (Decimal "1"))) (Sequence [])),
-          ("let x:int=2", Let "x" (Binding [] (NamedType "int") (IntLit (Decimal "2"))) (Sequence [])),
+  let validELet =
+        [ ("let x : int = 1", ELet "x" (Binding [] (NamedType "int") (EIntLit (Decimal "1"))) (ESequence [])),
+          ("let x:int=2", ELet "x" (Binding [] (NamedType "int") (EIntLit (Decimal "2"))) (ESequence [])),
           ( "let f (x : int) => int = x",
-            Let "f" (Binding [TypedParam "x" (NamedType "int")] (NamedType "int") (Var "x")) (Sequence [])
+            ELet "f" (Binding [TypedParam "x" (NamedType "int")] (NamedType "int") (EVar "x")) (ESequence [])
           ),
           ( "let f (x : int) -> (y : int) => int = x",
-            Let "f" (Binding [TypedParam "x" (NamedType "int"), TypedParam "y" (NamedType "int")] (NamedType "int") (Var "x")) (Sequence [])
+            ELet "f" (Binding [TypedParam "x" (NamedType "int"), TypedParam "y" (NamedType "int")] (NamedType "int") (EVar "x")) (ESequence [])
           ),
           ( "let f () => unit = x",
-            Let "f" (Binding [UnitParam] (NamedType "unit") (Var "x")) (Sequence [])
+            ELet "f" (Binding [UnitParam] (NamedType "unit") (EVar "x")) (ESequence [])
           )
         ]
 
-  let invalidLet =
+  let invalidELet =
         [ "let x =",
           "letx = 1",
           "let type = 1",
@@ -30,66 +32,65 @@ spec = do
           "let f x = 1"
         ]
 
-  let validBinaryOp =
-        [ ("1 + 2", BinaryOp (IntLit (Decimal "1")) "+" (IntLit (Decimal "2"))),
-          ("3.14 * 2.0", BinaryOp (FloatLit (DecimalFloat "3.14")) "*" (FloatLit (DecimalFloat "2.0"))),
-          ("x - y", BinaryOp (Var "x") "-" (Var "y")),
+  let validEInfixOp =
+        [ ("1 + 2", EInfixOp (EIntLit (Decimal "1")) "+" (EIntLit (Decimal "2"))),
+          ("3.14 * 2.0", EInfixOp (EFloatLit (DecimalFloat "3.14")) "*" (EFloatLit (DecimalFloat "2.0"))),
+          ("x - y", EInfixOp (EVar "x") "-" (EVar "y")),
           ( "1 + 2 * 3",
-            BinaryOp
-              (IntLit (Decimal "1"))
+            EInfixOp
+              (EIntLit (Decimal "1"))
               "+"
-              (BinaryOp (IntLit (Decimal "2")) "*" (IntLit (Decimal "3")))
+              (EInfixOp (EIntLit (Decimal "2")) "*" (EIntLit (Decimal "3")))
           ),
-          ("a / b", BinaryOp (Var "a") "/" (Var "b")),
-          ("a % b", BinaryOp (Var "a") "%" (Var "b")),
-          ("a << b", BinaryOp (Var "a") "<<" (Var "b")),
-          ("a >> b", BinaryOp (Var "a") ">>" (Var "b")),
-          ("a & b", BinaryOp (Var "a") "&" (Var "b")),
-          ("a &^ b", BinaryOp (Var "a") "&^" (Var "b")),
-          ("a | b", BinaryOp (Var "a") "|" (Var "b")),
-          ("a ^ b", BinaryOp (Var "a") "^" (Var "b")),
-          ("a == b", BinaryOp (Var "a") "==" (Var "b")),
-          ("a != b", BinaryOp (Var "a") "!=" (Var "b")),
-          ("a < b", BinaryOp (Var "a") "<" (Var "b")),
-          ("a > b", BinaryOp (Var "a") ">" (Var "b")),
-          ("a <= b", BinaryOp (Var "a") "<=" (Var "b")),
-          ("a >= b", BinaryOp (Var "a") ">=" (Var "b")),
-          ("a && b", BinaryOp (Var "a") "&&" (Var "b")),
-          ("a || b", BinaryOp (Var "a") "||" (Var "b")),
-          -- & (prec 5) tighter than && (prec 2)
-          ("a & b && c", BinaryOp (BinaryOp (Var "a") "&" (Var "b")) "&&" (Var "c")),
-          -- \| (prec 4) tighter than && (prec 2)
-          ("a | b && c", BinaryOp (BinaryOp (Var "a") "|" (Var "b")) "&&" (Var "c")),
+          ("a / b", EInfixOp (EVar "a") "/" (EVar "b")),
+          ("a % b", EInfixOp (EVar "a") "%" (EVar "b")),
+          ("a <<< b", EInfixOp (EVar "a") "<<<" (EVar "b")),
+          ("a >>> b", EInfixOp (EVar "a") ">>>" (EVar "b")),
+          ("a &&& b", EInfixOp (EVar "a") "&&&" (EVar "b")),
+          ("a ||| b", EInfixOp (EVar "a") "|||" (EVar "b")),
+          ("a ^^^ b", EInfixOp (EVar "a") "^^^" (EVar "b")),
+          ("a == b", EInfixOp (EVar "a") "==" (EVar "b")),
+          ("a != b", EInfixOp (EVar "a") "!=" (EVar "b")),
+          ("a < b", EInfixOp (EVar "a") "<" (EVar "b")),
+          ("a > b", EInfixOp (EVar "a") ">" (EVar "b")),
+          ("a <= b", EInfixOp (EVar "a") "<=" (EVar "b")),
+          ("a >= b", EInfixOp (EVar "a") ">=" (EVar "b")),
+          ("a && b", EInfixOp (EVar "a") "&&" (EVar "b")),
+          ("a || b", EInfixOp (EVar "a") "||" (EVar "b")),
+          -- &&& (prec 5) tighter than && (prec 2)
+          ("a &&& b && c", EInfixOp (EInfixOp (EVar "a") "&&&" (EVar "b")) "&&" (EVar "c")),
+          -- ||| (prec 4) tighter than && (prec 2)
+          ("a ||| b && c", EInfixOp (EInfixOp (EVar "a") "|||" (EVar "b")) "&&" (EVar "c")),
           -- == (prec 3) tighter than && (prec 2)
-          ("a == b && c", BinaryOp (BinaryOp (Var "a") "==" (Var "b")) "&&" (Var "c")),
+          ("a == b && c", EInfixOp (EInfixOp (EVar "a") "==" (EVar "b")) "&&" (EVar "c")),
           -- && (prec 2) tighter than || (prec 1)
-          ("a && b || c", BinaryOp (BinaryOp (Var "a") "&&" (Var "b")) "||" (Var "c"))
+          ("a && b || c", EInfixOp (EInfixOp (EVar "a") "&&" (EVar "b")) "||" (EVar "c"))
         ]
 
-  let invalidBinaryOp =
+  let invalidEInfixOp =
         [ "a +",
           "+ b",
           "a + + b",
-          "a & & b",
-          "a | | b"
+          "a &&& &&& b",
+          "a ||| ||| b"
         ]
 
-  let validIf =
+  let validEIf =
         [ ( "if x then 1 else 2",
-            If (Var "x") (IntLit (Decimal "1")) (IntLit (Decimal "2"))
+            EIf (EVar "x") (EIntLit (Decimal "1")) (EIntLit (Decimal "2"))
           ),
           ( "if x then y else z",
-            If (Var "x") (Var "y") (Var "z")
+            EIf (EVar "x") (EVar "y") (EVar "z")
           ),
           ( "if x then 1 else 2 + 3",
-            If
-              (Var "x")
-              (IntLit (Decimal "1"))
-              (BinaryOp (IntLit (Decimal "2")) "+" (IntLit (Decimal "3")))
+            EIf
+              (EVar "x")
+              (EIntLit (Decimal "1"))
+              (EInfixOp (EIntLit (Decimal "2")) "+" (EIntLit (Decimal "3")))
           )
         ]
 
-  let invalidIf =
+  let invalidEIf =
         [ "if then 1 else 2",
           "if x then else 2",
           "if x then 1 else",
@@ -98,13 +99,13 @@ spec = do
         ]
 
   let validParen =
-        [ ("(1)", IntLit (Decimal "1")),
-          ("(x)", Var "x"),
+        [ ("(1)", EIntLit (Decimal "1")),
+          ("(x)", EVar "x"),
           ( "(1 + 2) * 3",
-            BinaryOp
-              (BinaryOp (IntLit (Decimal "1")) "+" (IntLit (Decimal "2")))
+            EInfixOp
+              (EInfixOp (EIntLit (Decimal "1")) "+" (EIntLit (Decimal "2")))
               "*"
-              (IntLit (Decimal "3"))
+              (EIntLit (Decimal "3"))
           )
         ]
 
@@ -113,45 +114,48 @@ spec = do
           "1)"
         ]
 
-  let validApplication =
-        [ ("f x", Application (Var "f") [Var "x"]),
-          ("f x y", Application (Var "f") [Var "x", Var "y"]),
-          ("f 1 2", Application (Var "f") [IntLit (Decimal "1"), IntLit (Decimal "2")]),
+  let validEApplication =
+        [ ("f x", EApplication (EVar "f") [EVar "x"]),
+          ("f x y", EApplication (EVar "f") [EVar "x", EVar "y"]),
+          ("f 1 2", EApplication (EVar "f") [EIntLit (Decimal "1"), EIntLit (Decimal "2")]),
           ( "f (x + 1)",
-            Application (Var "f") [BinaryOp (Var "x") "+" (IntLit (Decimal "1"))]
+            EApplication (EVar "f") [EInfixOp (EVar "x") "+" (EIntLit (Decimal "1"))]
           ),
           ( "f x + y",
-            BinaryOp (Application (Var "f") [Var "x"]) "+" (Var "y")
+            EInfixOp (EApplication (EVar "f") [EVar "x"]) "+" (EVar "y")
+          ),
+          -- if/func/match are now valid argument atoms (line fold disambiguates)
+          ( "f if x then 1 else 2",
+            EApplication (EVar "f") [EIf (EVar "x") (EIntLit (Decimal "1")) (EIntLit (Decimal "2"))]
           )
         ]
 
-  let invalidApplication =
-        [ "f if x then 1 else 2",
-          "f let x = 1"
+  let invalidEApplication =
+        [ "f let x = 1"
         ]
 
-  let parseExpr s = parse (exprBlock <* eof) "ExprSpec.hs" s
+  let parseExpr s = parse (sequence' Nothing (mkPos 1) <* scn <* eof) "ExprSpec.hs" s
 
-  describe "exprBlock parses" $ do
+  describe "sequence parses" $ do
     it "let" $
-      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validLet
-    it "binary op" $
-      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validBinaryOp
+      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validELet
+    it "infix op" $
+      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validEInfixOp
     it "if" $
-      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validIf
+      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validEIf
     it "paren" $
       mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validParen
     it "application" $
-      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validApplication
+      mapM_ (\(s, expected) -> parseExpr s `shouldBe` Right expected) validEApplication
 
-  describe "exprBlock rejects" $ do
+  describe "sequence rejects" $ do
     it "invalid let" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidLet
-    it "invalid binary op" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidBinaryOp
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidELet
+    it "invalid infix op" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEInfixOp
     it "invalid if" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIf
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEIf
     it "invalid paren" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
     it "invalid application" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidApplication
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEApplication

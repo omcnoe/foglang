@@ -49,15 +49,16 @@ let first (x : int) => int =
 
   let inner (candidates : []int) => int =
     if 1 == 0 then 0
-    else match candidates with
-      | [] => 0
-      | x :: rest =>
-        match x with
-          | 0 =>
-            a x
-          | _ =>
-            let r : int = b x
-            r
+    else
+      match candidates with
+        | [] => 0
+        | x :: rest =>
+          match x with
+            | 0 =>
+              a x
+            | _ =>
+              let r : int = b x
+              r
   inner [x]
 
 // Top-level function after function containing complex match nesting

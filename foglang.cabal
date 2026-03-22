@@ -36,6 +36,7 @@ library
       Foglang.Parser.Header
       Foglang.Parser.Ident
       Foglang.Parser.IntLit
+      Foglang.Parser.Patterns
       Foglang.Parser.StringLit
       Foglang.Parser.Types
       Foglang.TAST

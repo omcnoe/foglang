@@ -3,11 +3,19 @@ module Foglang.Codegen (codegenGoFile) where
 import Data.Text qualified as T
 import Foglang.AST (FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), PackageClause (..), Param (..), StringLit (..), TypeExpr (..))
 import Foglang.Elaboration (elabExpr, preludeEnv)
-import Foglang.TAST (TBinding (..), TExpr (..), tExprType)
+import Foglang.TAST (TBinding (..), TExpr (..), TMatchArm (..), TPattern (..), tExprType)
 import System.Process (readProcess)
 
 ind :: Int -> T.Text
 ind n = T.replicate n "\t"
+
+-- Suppress Go's "declared and not used" error for a local variable.
+useVar :: Int -> T.Text -> T.Text
+useVar indent name = ind indent <> "_ = " <> name <> "\n"
+
+-- Inline variant for use inside IIFEs (semicolon-separated).
+useVarInline :: T.Text -> T.Text
+useVarInline name = "_ = " <> name <> "; "
 
 -- Wrap a single expression as a Go inline closure body.
 -- Unit-returning closures omit the return type and 'return' keyword.
@@ -22,15 +30,12 @@ genLocalFunc indent params retTy trhs =
   "func("
     <> params
     <> ")"
-    <> retTypeText
+    <> retTypeGoText retTy
     <> " {\n"
     <> bodyText (indent + 1) trhs
     <> ind indent
     <> "}"
   where
-    retTypeText = case retTy of
-      NamedType (Ident "()") -> ""
-      ty -> " " <> typeExprGoText ty
     bodyText = case retTy of
       NamedType (Ident "()") -> genTStmtBody
       _ -> genTBody
@@ -52,18 +57,22 @@ typeExprGoText :: TypeExpr -> T.Text
 typeExprGoText (NamedType (Ident "()")) = ""
 typeExprGoText (NamedType (Ident t)) = t
 typeExprGoText (SliceType t) = "[]" <> typeExprGoText t
+typeExprGoText (MapType k v) = "map[" <> typeExprGoText k <> "]" <> typeExprGoText v
 typeExprGoText (FuncType fixedTys mVarTy retTy) =
   "func("
     <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeExprGoText vTy]) mVarTy)
     <> ")"
-    <> case retTy of
-      NamedType (Ident "()") -> ""
-      _ -> " " <> typeExprGoText retTy
+    <> retTypeGoText retTy
 
 -- Like typeExprGoText but maps unit to struct{} for use in parameter positions.
 paramTypeGoText :: TypeExpr -> T.Text
 paramTypeGoText (NamedType (Ident "()")) = "struct{}"
 paramTypeGoText t = typeExprGoText t
+
+-- Return type annotation for Go: empty for unit, " T" otherwise.
+retTypeGoText :: TypeExpr -> T.Text
+retTypeGoText (NamedType (Ident "()")) = ""
+retTypeGoText ty = " " <> typeExprGoText ty
 
 -- Render a parameter list as Go source.
 -- A sole anonymous UnitParam is the zero-param rewrite: produces "" (no params).
@@ -77,7 +86,7 @@ paramListGoText params = T.intercalate ", " $ zipWith paramText [0 :: Int ..] pa
     paramText i UnitParam = "_p" <> T.pack (show i) <> " struct{}"
 
 genElsePart :: BodyMode -> Int -> TExpr -> T.Text
-genElsePart mode indent (TIf _ cond then' else') =
+genElsePart mode indent (TEIf _ cond then' else') =
   " else if "
     <> genTExpr cond
     <> " {\n"
@@ -105,18 +114,102 @@ genIfChain mode indent cond then' else' =
 
 data BodyMode = ReturnLast | StmtOnly
 
+-- Generate a match expression as a statement-level if/else chain.
+genMatchBody :: BodyMode -> Int -> TExpr -> [TMatchArm] -> T.Text
+genMatchBody _ _ _ [] = ""
+genMatchBody mode indent tscrut arms =
+  -- Detect tuple match by scanning ALL arms for any tuple pattern.
+  -- Go multi-return (e.g. map comma-ok) must be immediately destructured,
+  -- so we also alias scrutVar := scrutVar_0 for non-tuple arms to reference
+  -- (only when there are non-tuple arms, to avoid unused variable errors in Go).
+  -- Scan arms once: detect tuple arity and whether non-tuple arms exist.
+  let (tupleArity, hasNonTupleArm) = foldr
+        (\(TMatchArm p _) (arity, hasNon) -> case p of
+           TPTuple pats -> (max arity (length pats), hasNon)
+           _ -> (arity, True))
+        (0, False) arms
+      isTupleMatch = tupleArity > 0
+      scrutVar = "_scrut" <> T.pack (show indent)
+      tupleVarNames = [scrutVar <> "_" <> T.pack (show i) | i <- [0 .. tupleArity - 1]]
+      scrutDecl
+        | isTupleMatch =
+            let vars = T.intercalate ", " tupleVarNames
+                useVars = T.concat [useVar indent v | v <- tupleVarNames]
+                alias = if hasNonTupleArm
+                          then ind indent <> scrutVar <> " := " <> scrutVar <> "_0\n" <> useVar indent scrutVar
+                          else ""
+             in ind indent <> vars <> " := " <> genTExpr tscrut <> "\n" <> useVars <> alias
+        | otherwise = ind indent <> scrutVar <> " := " <> genTExpr tscrut <> "\n" <> useVar indent scrutVar
+      genArm isFirst isLast (TMatchArm tpat tbody) =
+        let (cond, bindings) = genPatternCond scrutVar tpat
+            keyword'
+              | isFirst = "if " <> cond <> " "
+              | isLast && isIrrefutablePattern tpat = "} else "
+              | otherwise = "} else if " <> cond <> " "
+            bindingText = T.concat [ind (indent + 1) <> n <> " := " <> v <> "\n" <> useVar (indent + 1) n | (n, v) <- bindings]
+         in ind indent <> keyword' <> "{\n" <> bindingText <> genBody mode (indent + 1) tbody
+      lastFlags = replicate (length arms - 1) False ++ [True]
+      armTexts = zipWith3 genArm (True : repeat False) lastFlags arms
+      lastArmIsCatchAll = case last arms of
+        TMatchArm tpat _ -> isIrrefutablePattern tpat
+      defaultReturn = case mode of
+        ReturnLast | not lastArmIsCatchAll -> ind indent <> "panic(\"match not exhaustive\")\n"
+        _ -> ""
+   in scrutDecl <> T.concat armTexts <> ind indent <> "}\n" <> defaultReturn
+
+-- Generate a match expression as an inline IIFE.
+genMatchExpr :: TypeExpr -> TExpr -> [TMatchArm] -> T.Text
+genMatchExpr ty tscrut tarms =
+  "func() " <> typeExprGoText ty <> " {\n"
+    <> genMatchBody ReturnLast 1 tscrut tarms
+    <> "}()"
+
+-- Combine Go conditions with &&, filtering out trivial "true" entries.
+combineConds :: [T.Text] -> T.Text
+combineConds conds =
+  case filter (/= "true") conds of
+    [] -> "true"
+    cs -> T.intercalate " && " cs
+
+-- Whether a pattern always matches (no condition check needed).
+isIrrefutablePattern :: TPattern -> Bool
+isIrrefutablePattern TPWildcard = True
+isIrrefutablePattern (TPVar _) = True
+isIrrefutablePattern (TPTuple pats) = all isIrrefutablePattern pats
+isIrrefutablePattern _ = False
+
+-- Generate the condition check and variable bindings for a pattern.
+-- Returns (condition text, [(varName, valueExpr)])
+genPatternCond :: T.Text -> TPattern -> (T.Text, [(T.Text, T.Text)])
+genPatternCond _ TPWildcard = ("true", [])
+genPatternCond scrut (TPVar (Ident name)) = ("true", [(name, scrut)])
+genPatternCond scrut (TPIntLit lit) = (scrut <> " == " <> intLitText lit, [])
+genPatternCond scrut (TPBoolLit True) = (scrut, [])
+genPatternCond scrut (TPBoolLit False) = ("!(" <> scrut <> ")", [])
+genPatternCond scrut TPSliceEmpty = ("len(" <> scrut <> ") == 0", [])
+genPatternCond scrut (TPCons hdPat tlPat) =
+  let hdExpr = scrut <> "[0]"
+      tlExpr = scrut <> "[1:]"
+      (hdCond, hdBindings) = genPatternCond hdExpr hdPat
+      (tlCond, tlBindings) = genPatternCond tlExpr tlPat
+   in (combineConds ["len(" <> scrut <> ") > 0", hdCond, tlCond], hdBindings ++ tlBindings)
+genPatternCond scrut (TPTuple pats) =
+  let results = [genPatternCond (scrut <> "_" <> T.pack (show i)) pat | (i, pat) <- zip [0 :: Int ..] pats]
+   in (combineConds (map fst results), concatMap snd results)
+
 -- Unified body generator. ReturnLast emits 'return expr' for the final expression;
 -- StmtOnly emits it as a plain statement.
 genBody :: BodyMode -> Int -> TExpr -> T.Text
-genBody StmtOnly _ TUnitLit = ""
-genBody mode indent (TIf _ cond then' else') = genIfChain mode indent cond then' else'
-genBody StmtOnly indent (TSequence _ texprs) = T.concat (map (genBody StmtOnly indent) texprs)
-genBody ReturnLast indent (TSequence _ texprs)
+genBody StmtOnly _ TEUnitLit = ""
+genBody mode indent (TEIf _ cond then' else') = genIfChain mode indent cond then' else'
+genBody mode indent (TEMatch _ tscrut tarms) = genMatchBody mode indent tscrut tarms
+genBody StmtOnly indent (TESequence _ texprs) = T.concat (map (genBody StmtOnly indent) texprs)
+genBody ReturnLast indent (TESequence _ texprs)
   | null texprs = ind indent <> "return ()\n"
   | otherwise =
       T.concat (map (genBody StmtOnly indent) (init texprs))
         <> genBody ReturnLast indent (last texprs)
-genBody mode indent (TLet _ name (TBinding [] retTy trhs) tin)
+genBody mode indent (TELet _ name (TBinding [] retTy trhs) tin)
   | retTy == NamedType (Ident "()") || tExprType trhs == NamedType (Ident "()"),
     name == Ident "_" =
       ind indent
@@ -130,6 +223,7 @@ genBody mode indent (TLet _ name (TBinding [] retTy trhs) tin)
         <> ind indent
         <> identText name
         <> " := struct{}{}\n"
+        <> useVar indent (identText name)
         <> genBody mode indent tin
   | otherwise =
       ind indent
@@ -137,15 +231,23 @@ genBody mode indent (TLet _ name (TBinding [] retTy trhs) tin)
         <> " := "
         <> genTExpr trhs
         <> "\n"
+        <> useVar indent (identText name)
         <> genBody mode indent tin
-genBody mode indent (TLet _ name (TBinding params retTy trhs) tin) =
-  ind indent
-    <> identText name
-    <> " := "
-    <> genLocalFunc indent (paramListGoText params) retTy trhs
-    <> "\n"
-    <> genBody mode indent tin
-genBody StmtOnly indent te@(TApplication _ _ _) = ind indent <> genTExpr te <> "\n"
+genBody mode indent (TELet _ name (TBinding params retTy trhs) tin) =
+  -- Use var declaration + assignment for local functions to support recursion.
+  -- Go closures can't reference themselves with :=, but can with var + =.
+  let paramsText = paramListGoText params
+      funcTy = "func(" <> paramsText <> ")" <> retTypeGoText retTy
+   in ind indent
+        <> "var " <> identText name <> " " <> funcTy <> "\n"
+        <> ind indent
+        <> identText name
+        <> " = "
+        <> genLocalFunc indent paramsText retTy trhs
+        <> "\n"
+        <> useVar indent (identText name)
+        <> genBody mode indent tin
+genBody StmtOnly indent te@(TEApplication _ _ _) = ind indent <> genTExpr te <> "\n"
 genBody StmtOnly indent te = ind indent <> "_ = " <> genTExpr te <> "\n"
 genBody ReturnLast indent te = ind indent <> "return " <> genTExpr te <> "\n"
 
@@ -162,34 +264,42 @@ genFunc name params retTy tbody =
     <> "("
     <> paramListGoText params
     <> ")"
-    <> retTypeText
+    <> retTypeGoText retTy
     <> " {\n"
     <> bodyText 1 tbody
     <> "}\n"
   where
-    retTypeText = case retTy of
-      NamedType (Ident "()") -> ""
-      ty -> " " <> typeExprGoText ty
     bodyText = case retTy of
       NamedType (Ident "()") -> genTStmtBody
       _ -> genTBody
 
 isUnitArg :: TExpr -> Bool
-isUnitArg TUnitLit = True
+isUnitArg TEUnitLit = True
 isUnitArg _ = False
 
 -- Generate a Go expression from a TExpr.
 -- For Application nodes, the function's TExpr carries its type, enabling
 -- arity-aware partial application codegen.
+-- Map foglang operators to Go operators (triple-char bitwise/shift → Go equivalents)
+goInfixOp :: T.Text -> T.Text
+goInfixOp "|||" = "|"
+goInfixOp "&&&" = "&"
+goInfixOp "^^^" = "^"
+goInfixOp "<<<" = "<<"
+goInfixOp ">>>" = ">>"
+goInfixOp op = op
+
 genTExpr :: TExpr -> T.Text
-genTExpr (TVar _ i) = identText i
-genTExpr (TIntLit _ lit) = intLitText lit
-genTExpr (TFloatLit _ lit) = floatLitText lit
-genTExpr (TStrLit _ (StringLit t)) = "\"" <> t <> "\""
-genTExpr TUnitLit = "struct{}{}"
-genTExpr (TVariadicSpread _ te) = genTExpr te <> "..."
-genTExpr (TBinaryOp _ e1 op e2) = "(" <> genTExpr e1 <> " " <> op <> " " <> genTExpr e2 <> ")"
-genTExpr (TApplication _ tf targs) =
+genTExpr (TEVar _ i) = identText i
+genTExpr (TEIntLit _ lit) = intLitText lit
+genTExpr (TEFloatLit _ lit) = floatLitText lit
+genTExpr (TEStrLit _ (StringLit t)) = "\"" <> t <> "\""
+genTExpr TEUnitLit = "struct{}{}"
+genTExpr (TEVariadicSpread _ te) = genTExpr te <> "..."
+genTExpr (TEIndex _ te tidx) = genTExpr te <> "[" <> genTExpr tidx <> "]"
+genTExpr (TEInfixOp _ e1 "::" e2) = "append(" <> typeExprGoText (tExprType e2) <> "{" <> genTExpr e1 <> "}, " <> genTExpr e2 <> "...)"
+genTExpr (TEInfixOp _ e1 op e2) = "(" <> genTExpr e1 <> " " <> goInfixOp op <> " " <> genTExpr e2 <> ")"
+genTExpr (TEApplication _ tf targs) =
   case tExprType tf of
     FuncType fixedTys mVarTy retTy ->
       let nFixed = length fixedTys
@@ -226,21 +336,21 @@ genTExpr (TApplication _ tf targs) =
                    in closureExpr closureParams retTy (genTExpr tf <> "(" <> callArgs <> ")")
                 else
                   -- Full variadic call: fixed params supplied + variadic args (or () sentinel).
-                  -- () sentinel is stripped; TVariadicSpread nodes emit expr... via genTExpr.
+                  -- () sentinel is stripped; TEVariadicSpread nodes emit expr... via genTExpr.
                   let varArgs = filter (not . isUnitArg) (drop nFixed targs)
                       allArgs = map genTExpr (take nFixed targs) ++ map genTExpr varArgs
                    in genTExpr tf <> "(" <> T.intercalate ", " allArgs <> ")"
     _ -> genTExpr tf <> "(" <> T.intercalate ", " (map genTExpr targs) <> ")"
-genTExpr (TIf ty cond then' else') =
+genTExpr (TEIf ty cond then' else') =
   "func() " <> typeExprGoText ty <> " { if " <> genTExpr cond <> " { return " <> genTExpr then' <> " }; return " <> genTExpr else' <> " }()"
-genTExpr (TSequence _ []) = "struct{}{}"
-genTExpr (TSequence ty texprs) =
+genTExpr (TESequence _ []) = "struct{}{}"
+genTExpr (TESequence ty texprs) =
   "func() " <> typeExprGoText ty <> " { "
     <> T.intercalate "; " (map genTExpr (init texprs))
     <> "; return "
     <> genTExpr (last texprs)
     <> " }()"
-genTExpr (TLet ty name (TBinding [] _ trhs) tin)
+genTExpr (TELet ty name (TBinding [] _ trhs) tin)
   | tExprType trhs == NamedType (Ident "()"),
     name == Ident "_" =
       "func() "
@@ -259,6 +369,7 @@ genTExpr (TLet ty name (TBinding [] _ trhs) tin)
         <> "; "
         <> identText name
         <> " := struct{}{}; "
+        <> useVarInline (identText name)
         <> returnKw
         <> genTExpr tin
         <> " }()"
@@ -270,6 +381,7 @@ genTExpr (TLet ty name (TBinding [] _ trhs) tin)
         <> " := "
         <> genTExpr trhs
         <> "; "
+        <> useVarInline (identText name)
         <> returnKw
         <> genTExpr tin
         <> " }()"
@@ -280,17 +392,26 @@ genTExpr (TLet ty name (TBinding [] _ trhs) tin)
     returnKw = case ty of
       NamedType (Ident "()") -> ""
       _ -> "return "
-genTExpr (TLet ty name (TBinding params retTy trhs) tin) =
-  "func() "
-    <> outerRetTyText
-    <> "{ "
-    <> identText name
-    <> " := "
-    <> closureExpr (paramListGoText params) retTy (genTExpr trhs)
-    <> "; "
-    <> outerReturnKw
-    <> genTExpr tin
-    <> " }()"
+genTExpr (TELet ty name (TBinding params retTy trhs) tin) =
+  -- Use var declaration + assignment for local functions to support recursion,
+  -- matching the statement-level codegen in genBody.
+  let paramsText = paramListGoText params
+      funcTy = "func(" <> paramsText <> ")" <> retTypeGoText retTy
+   in "func() "
+        <> outerRetTyText
+        <> "{ var "
+        <> identText name
+        <> " "
+        <> funcTy
+        <> "; "
+        <> identText name
+        <> " = "
+        <> closureExpr paramsText retTy (genTExpr trhs)
+        <> "; "
+        <> useVarInline (identText name)
+        <> outerReturnKw
+        <> genTExpr tin
+        <> " }()"
   where
     outerRetTyText = case ty of
       NamedType (Ident "()") -> ""
@@ -298,9 +419,15 @@ genTExpr (TLet ty name (TBinding params retTy trhs) tin) =
     outerReturnKw = case ty of
       NamedType (Ident "()") -> ""
       _ -> "return "
-genTExpr (TLambda _ (TBinding params retTy tbody@(TSequence _ _))) =
+genTExpr (TESliceLit (SliceType (NamedType (Ident "opaque"))) []) = "nil"
+genTExpr (TESliceLit ty []) = typeExprGoText ty <> "{}"
+genTExpr (TESliceLit ty texprs) = typeExprGoText ty <> "{" <> T.intercalate ", " (map genTExpr texprs) <> "}"
+genTExpr (TEMapLit (NamedType (Ident "opaque"))) = "nil"
+genTExpr (TEMapLit ty) = typeExprGoText ty <> "{}"
+genTExpr (TEMatch ty tscrut tarms) = genMatchExpr ty tscrut tarms
+genTExpr (TELambda _ (TBinding params retTy tbody@(TESequence _ _))) =
   genLocalFunc 0 (paramListGoText params) retTy tbody
-genTExpr (TLambda _ (TBinding params retTy tbody)) = case retTy of
+genTExpr (TELambda _ (TBinding params retTy tbody)) = case retTy of
   NamedType (Ident "()") ->
     "func(" <> paramListGoText params <> ") { " <> genTExpr tbody <> " }"
   _ ->
@@ -321,7 +448,7 @@ codegenHeader (Header (PackageClause pkg) imports) =
     <> T.concat (map codegenImport imports)
 
 codegenDecl :: Ident -> [Param] -> TypeExpr -> TExpr -> T.Text
-codegenDecl name [] valTy (TSequence _ texprs) =
+codegenDecl name [] valTy (TESequence _ texprs) =
   "var "
     <> identText name
     <> " "
@@ -329,7 +456,7 @@ codegenDecl name [] valTy (TSequence _ texprs) =
     <> " = func() "
     <> typeExprGoText valTy
     <> " {\n"
-    <> genTBody 1 (TSequence (NamedType (Ident "()")) texprs)
+    <> genTBody 1 (TESequence (NamedType (Ident "()")) texprs)
     <> "}()\n"
 codegenDecl name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> coerceValue valTy tbody <> "\n"
 codegenDecl name params retTy tbody = genFunc name params retTy tbody
@@ -371,15 +498,15 @@ coerceValue declTy tbody =
     _ -> genTExpr tbody
 
 isStmtTExpr :: TExpr -> Bool
-isStmtTExpr (TApplication _ _ _) = True
-isStmtTExpr (TIf _ _ _ _) = True
-isStmtTExpr (TSequence _ _) = True
-isStmtTExpr (TBinaryOp _ _ _ _) = True
+isStmtTExpr (TEApplication _ _ _) = True
+isStmtTExpr (TEIf _ _ _ _) = True
+isStmtTExpr (TESequence _ _) = True
+isStmtTExpr (TEInfixOp _ _ _ _) = True
 isStmtTExpr _ = False
 
 codegenTopLevel :: TExpr -> T.Text
-codegenTopLevel (TLet _ n (TBinding p t trhs) tin) = codegenDecl n p t trhs <> codegenTopLevel tin
-codegenTopLevel (TSequence _ texprs) = T.concat (map codegenTopLevel texprs)
+codegenTopLevel (TELet _ n (TBinding p t trhs) tin) = codegenDecl n p t trhs <> codegenTopLevel tin
+codegenTopLevel (TESequence _ texprs) = T.concat (map codegenTopLevel texprs)
 codegenTopLevel te
   | isStmtTExpr te = "func init() {\n" <> genTStmtBody 1 te <> "}\n"
   | otherwise = ""

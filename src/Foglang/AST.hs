@@ -7,6 +7,8 @@ module Foglang.AST
     Param (..),
     Binding (..),
     Expr (..),
+    MatchArm (..),
+    Pattern (..),
     PackageClause (..),
     ImportAlias (..),
     ImportDecl (..),
@@ -42,6 +44,7 @@ newtype StringLit = StringLit T.Text
 data TypeExpr
   = NamedType Ident -- named type, e.g. int, float64, bool, unit
   | SliceType TypeExpr -- slice type, e.g. []int; also the type of a variadic parameter var inside a function body
+  | MapType TypeExpr TypeExpr -- map type, e.g. map[int][]int
   | FuncType [TypeExpr] (Maybe TypeExpr) TypeExpr -- fixed param types, optional variadic param type, return type
   deriving (Eq, Show)
 
@@ -59,18 +62,35 @@ data Binding = Binding [Param] TypeExpr Expr
 -- AST for expressions, directly built from user source code. No name resolution or complete types yet.
 -- Any TypeExpr here is user provided.
 data Expr
-  = Var Ident
-  | IntLit IntLit
-  | FloatLit FloatLit
-  | StrLit StringLit
-  | UnitLit -- the () literal; not a function call, just the unit value
-  | Let Ident Binding Expr -- name, binding, inExpr
-  | Lambda Binding -- anonymous "binding" (no name, no inExpr)
-  | If Expr Expr Expr
-  | BinaryOp Expr T.Text Expr
-  | Application Expr [Expr]
-  | Sequence [Expr]
-  | VariadicSpread Expr -- expr... unpacks []T into a variadic slot at a call site
+  = EVar Ident
+  | EIntLit IntLit
+  | EFloatLit FloatLit
+  | EStrLit StringLit
+  | EUnitLit -- the () literal; not a function call, just the unit value
+  | ELet Ident Binding Expr -- name, binding, inExpr
+  | ELambda Binding -- anonymous "binding" (no name, no inExpr)
+  | EIf Expr Expr Expr
+  | EInfixOp Expr T.Text Expr
+  | EApplication Expr [Expr]
+  | EIndex Expr Expr -- expr[expr] — slice/map indexing
+  | ESliceLit [Expr] -- slice literal: [], [x], [x, y, z]
+  | EMapLit -- empty map literal: {} TODO support map contents
+  | ESequence [Expr]
+  | EVariadicSpread Expr -- expr... unpacks []T into a variadic slot at a call site
+  | EMatch Expr [MatchArm] -- match scrutinee with | pattern => body
+  deriving (Eq, Show)
+
+data MatchArm = MatchArm Pattern Expr
+  deriving (Eq, Show)
+
+data Pattern
+  = PWildcard -- _
+  | PVar Ident -- variable binding
+  | PIntLit IntLit -- integer literal
+  | PBoolLit Bool -- true, false
+  | PSliceEmpty -- []
+  | PCons Pattern Pattern -- x :: rest
+  | PTuple [Pattern] -- (a, b)
   deriving (Eq, Show)
 
 newtype PackageClause = PackageClause Ident

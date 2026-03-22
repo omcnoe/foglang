@@ -43,13 +43,19 @@ let applyTwice (f : int -> int => int) -> (x : int) => int = f (f x)
 
 ### Type expressions
 
-Inside `(name : type)` param annotations, a type is either a plain name or a parenthesised function type:
+Inside `(name : type)` param annotations, a type is either a plain name, a composite type, or a parenthesised function type:
 
 - plain name: `int`, `bool`, `string`, ...
+- slice type: `[]T`
+- map type: `map[K]V`
 - function type: `(T1 -> T2 -> ... => Tr)` — always in parens
 
 ```
 int                           -- a plain type
+[]int                         -- slice of int
+[][]string                    -- slice of slice of string
+map[string]int                -- map from string to int
+map[int][]int                 -- map from int to slice of int
 (int -> int => int)           -- takes int, takes int, returns int
 ((int -> int => int) => bool) -- takes a 2-arg int function, returns bool
 ```

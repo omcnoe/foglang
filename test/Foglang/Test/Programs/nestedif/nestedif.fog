@@ -18,7 +18,7 @@ let classifyBusted (n : int) => int =
   else if n < 100
   then if n < 50 then
          if n < 25 then
-         1
+          1
          else 2
         else 3 else 4
 

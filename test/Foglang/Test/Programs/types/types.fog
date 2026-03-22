@@ -1,0 +1,65 @@
+package main
+
+import "fmt"
+
+// Slice types -- various spacing
+let sliceCompact : []int = [1, 2, 3]
+let sliceSpaced : [] int = [4, 5, 6]
+let sliceNested : [][]int = [[1, 2], [3, 4]]
+let sliceNestedSpaced : [] [] int = [[7, 8], [9, 10]]
+
+// Map types -- various spacing
+let mapCompact : map[string]int = {}
+let mapSpaced : map [string] int = {}
+let mapWideSpaced : map  [  string  ]  int = {}
+let mapSliceVal : map[int][]int = {}
+let mapSliceValSpaced : map [int] [] int = {}
+
+// Line-folded type expressions (continuation indented past start)
+let sliceFolded :
+  []int = [100]
+let mapFolded :
+  map[int]
+    []int = {}
+let mapKeyFolded :
+  map
+    [int]
+    []string = {}
+
+// Test functions
+let f1 (x : int) => int = x * 2
+let f2 (a : int) -> (b : int) => int = a * b
+
+// Function types as parameters
+let applyF (f : (int => int)) (x : int) => int = f x
+let applyF2 (f : (int -> int => int)) (x : int) (y : int) => int = f x y
+
+// Block-level let params use scn, so type exprs are not line-fold-sensitive
+let applyBlockLevel (f : (int ->
+            int =>
+            int)) (x : int) (y : int) => int = f x y
+
+// Inline func expr inside a function body -- type exprs are line-fold-sensitive (uses sc')
+let applyLineFolded () => int = (
+  func (g : (int -> int => int))
+    -> (x : int)
+    -> (y : int)
+    => int = g x y) f2 3 4
+
+let main () => () =
+  fmt.Println sliceCompact
+  fmt.Println sliceSpaced
+  fmt.Println sliceNested
+  fmt.Println sliceNestedSpaced
+  fmt.Println mapCompact
+  fmt.Println mapSpaced
+  fmt.Println mapWideSpaced
+  fmt.Println mapSliceVal
+  fmt.Println mapSliceValSpaced
+  fmt.Println sliceFolded
+  fmt.Println mapFolded
+  fmt.Println mapKeyFolded
+  fmt.Println (applyF f1 21)
+  fmt.Println (applyF2 f2 10 20)
+  fmt.Println (applyBlockLevel f2 3 4)
+  fmt.Println (applyLineFolded ())

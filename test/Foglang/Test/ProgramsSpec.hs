@@ -20,6 +20,12 @@ helloWorldFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/hellowor
 helloWorldGoSrc :: T.Text
 helloWorldGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/helloworld/helloworld.go")
 
+indentationFogSrc :: T.Text
+indentationFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/indentation/indentation.fog")
+
+indentationGoSrc :: T.Text
+indentationGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/indentation/indentation.go")
+
 lambdaFogSrc :: T.Text
 lambdaFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/lambda/lambda.fog")
 
@@ -92,6 +98,12 @@ primesFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/primes/prime
 primesGoSrc :: T.Text
 primesGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/primes/primes.go")
 
+typesFogSrc :: T.Text
+typesFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/types/types.fog")
+
+typesGoSrc :: T.Text
+typesGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/types/types.go")
+
 spec :: Spec
 spec = describe "programs" $ do
   it "fibonacci.fog -> fibonacci.go" $
@@ -106,6 +118,9 @@ spec = describe "programs" $ do
   it "leapyear.fog -> leapyear.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "leapyear.fog" leapYearFogSrc)
       `shouldParseAndCodegenTo` leapYearGoSrc
+  it "indentation.fog -> indentation.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "indentation.fog" indentationFogSrc)
+      `shouldParseAndCodegenTo` indentationGoSrc
   it "nestedif.fog -> nestedif.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "nestedif.fog" nestedIfFogSrc)
       `shouldParseAndCodegenTo` nestedIfGoSrc
@@ -136,3 +151,6 @@ spec = describe "programs" $ do
   it "primes.fog -> primes.go" $
     fmap codegenGoFile (parse (fogFile <* eof) "primes.fog" primesFogSrc)
       `shouldParseAndCodegenTo` primesGoSrc
+  it "types.fog -> types.go" $
+    fmap codegenGoFile (parse (fogFile <* eof) "types.fog" typesFogSrc)
+      `shouldParseAndCodegenTo` typesGoSrc

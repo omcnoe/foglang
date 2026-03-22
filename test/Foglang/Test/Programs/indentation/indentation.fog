@@ -1,0 +1,393 @@
+package main
+
+import "fmt"
+
+// =============================================================================
+// RULE 1: line-indent
+// Children must be at column > the construct's line-indent.
+// This governs both sequence membership and expression continuation — the same
+// rule applied at different nesting levels.
+// =============================================================================
+
+// --- Sequence items: body indented past "let" ---
+let standard : int =
+  1
+
+// --- Body can be at any column past the keyword, not just +2 ---
+let wideIndent : int =
+        42
+
+// --- Multiple items in a Sequence: all past the line-indent ---
+// Note: items indented past the previous item's line-indent are continuations,
+// not new sequence items. So all items here are at the same column.
+let multiItem () => () =
+  fmt.Println "a"
+  fmt.Println "b"
+  fmt.Println "c"
+
+// --- Deeply nested let bodies each establish their own line-indent ---
+let nested : int =
+  let a : int =
+    let b : int =
+      let c : int = 1
+      c + 1
+    b + 1
+  a + 1
+
+// --- Expression continuation: "+ 2" is indented past "1" → single expression ---
+let folded : int =
+  1
+    + 2
+    + 3
+
+// --- Same column: "fmt.Println" at same col as "1" → two Sequence items ---
+let foldedThenStmt () => () =
+  1
+    + 2
+  fmt.Println "after the expression"
+
+// --- Deep continuation: all lines past the fold start ---
+let deepFold : int =
+  1
+      + 2
+          + 3
+    + 4
+
+// =============================================================================
+// RULE 2: Line-indent exception
+// Unambiguous tokens override the normal child/sibling distinction.
+// Covers infix operators, match arms (|), and if/then/else keywords.
+// =============================================================================
+
+// --- Infix operators: || chain, flat, no indentation needed ---
+let orChain (a : bool) (b : bool) (c : bool) => bool =
+  a
+  || b
+  || c
+
+// --- pipeline: flat (commented out: |> not yet implemented) ---
+// let piped : int =
+//   someValue
+//   |> transform
+//   |> filter
+//   |> collect
+
+// --- + is AMBIGUOUS (like -): same column = new Sequence item ---
+// let plusAmbig () => () =
+//   let a : int = 10
+//   + 3                    // this is a NEW Sequence item: the expression "+3" (unary +)
+
+// --- + indented = continuation (binary plus) ---
+// let plusCont : int =
+//   10
+//     + 3                  // this is 10 + 3 = 13
+
+// --- && chain mixed with line fold ---
+let andChain (a : bool) (b : bool) (c : bool) (d : bool) => bool =
+  a
+  && b
+  && c
+  && d
+
+// --- ||| (bitwise OR) is unambiguous infix.
+// With | no longer an infix operator, there is no match arm ambiguity.
+let bitwiseOrFlat (a : int) (b : int) => int =
+  a
+  ||| b
+
+// --- * and / are unambiguous, also continue ---
+let mulChain (x : int) => int =
+  x
+  * 2
+  * 3
+
+// --- minus is AMBIGUOUS: same column = new Sequence item (unary minus) ---
+// COMMENTED OUT: unary minus/plus not implemented yet as prefix operators.
+// Once supported, - 3 at the same column as "let a" is a new Sequence item,
+// not a continuation of 10.
+// let minusAmbig () => () =
+//   let a : int = 10
+//   - 3                    // this is a NEW Sequence item: the expression "-3"
+
+// --- minus indented = continuation (binary minus) ---
+let minusCont : int =
+  10
+    - 3                  // this is 10 - 3 = 7
+
+// --- comparison operators are unambiguous ---
+let compared (x : int) => bool =
+  x
+  > 0
+
+// --- Match arms: | at >= match's line-indent continues the match ---
+
+// --- Standard match ---
+let matchStd (x : int) => string =
+  match x with
+    | 0 => "zero"
+    | 1 => "one"
+    | _ => "other"
+
+// --- Arms at different columns: all >= match col, still valid ---
+// With ||| as the bitwise OR operator, | is unambiguously the match arm delimiter.
+let matchMessy (x : int) => string =
+  match x with
+    | 0 => "zero"
+        | 1 => "one"
+      | _ => "other"
+
+// --- Nested match: inner arms are deeper, outer resumes at outer level ---
+let matchNested (x : int) (y : int) => string =
+  match x with
+    | 0 =>
+      match y with
+        | 0 => "both zero"
+        | _ => "x zero"
+    | _ => "x nonzero"
+
+// --- Arms right at match column (col >= match col includes ==) ---
+let matchFlush (x : int) => string =
+  match x with
+  | 0 => "zero"
+  | _ => "other"
+
+// --- Bitwise OR inside arm body vs new arm ---
+// ||| inside a fold (after a LHS) is bitwise OR; | as a fresh sequence item is an arm
+let matchBitwiseOr (x : int) (y : int) => int =
+  match x with
+    | 1 =>
+      y
+        ||| 3            // indented past "y" → fold continuation → bitwise OR (y ||| 3)
+    | 2 =>
+      y
+    | _ => 0
+
+// --- Bitwise OR via Rule 2: ||| at same column as LHS, unambiguous infix → continuation ---
+let matchBitwiseOrFlat (x : int) (y : int) => int =
+  match x with
+    | 1 =>
+      y
+      ||| 3              // same column as "y", but ||| is unambiguous infix → Rule 2 → y ||| 3
+    | 2 =>
+      y
+    | _ => 0
+
+// --- | at the line-indent exits the body and becomes an arm ---
+let matchPipeAtLineIndent (x : int) => int =
+  match x with
+    | 1 =>
+      10
+    | 2 =>             // at pipeCol → not inside previous arm body → new arm
+      20
+    | _ => 0
+
+// --- | past the line-indent but with no LHS → becomes arm ---
+// With ||| as the bitwise OR operator, | is unambiguously the match arm delimiter.
+let matchPipeNoLHS (x : int) => string =
+  match x with
+    | 0 => "zero"
+      | 1 => "one"    // col > pipeCol, | is unambiguously an arm delimiter
+    | _ => "other"
+
+// =============================================================================
+// SEQUENCES AS EXPRESSIONS
+// Sequence is an Expr — it can appear anywhere an expression can
+// =============================================================================
+
+// --- Sequence in let body (the normal case) ---
+let seqBody () => int =
+  fmt.Println "computing"
+  42
+
+// --- Sequence in then/else branches ---
+let seqBranch (x : int) => int =
+  if x > 0 then
+    fmt.Println "positive"
+    x
+  else
+    fmt.Println "non-positive"
+    0 - x
+
+// --- Sequence in if condition ---
+let seqCond (x : int) => int =
+  if
+    let positive : bool = x > 0
+    positive
+  then x
+  else 0 - x
+
+// --- else if chaining: compound keyword, all branches share outermost if's line-indent ---
+let elseIfChain (x : int) => string =
+  if x == 1 then "one"
+  else if x == 2 then "two"
+  else if x == 3 then "three"
+  else "other"
+
+// --- else if with Sequence branches ---
+let elseIfSeq (x : int) => int =
+  if x > 0 then
+    fmt.Println "positive"
+    x
+  else if x == 0 then
+    fmt.Println "zero"
+    0
+  else
+    fmt.Println "negative"
+    0 - x
+
+// --- else if with Sequence conditions ---
+let elseIfSeqCond (x : int) => string =
+  if
+    let big : bool = x > 100
+    big
+  then "big"
+  else if
+    let medium : bool = x > 10
+    medium
+  then "medium"
+  else "small"
+
+// --- Sequence inside parens (layout resets) ---
+let seqParen : int = (
+  let x : int = 7
+  x + 1
+)
+
+// --- Sequence as match arm body ---
+let seqArm (x : int) => int =
+  match x with
+    | 0 =>
+      fmt.Println "got zero"
+      0
+    | n =>
+      fmt.Println "got nonzero"
+      n * 2
+
+// =============================================================================
+// PARENS RESET LAYOUT
+// Inside () and [], outer indentation constraints don't apply
+// =============================================================================
+
+// --- Paren resets layout: content free from outer context ---
+let parenReset : int =
+  let f : (int => int) = (
+    func (x : int) => int =
+      x * 2
+  )
+  f 21
+
+// --- Flat operator chains inside parens ---
+let parenFlat (a : bool) (b : bool) (c : bool) => bool = (
+a
+|| b
+|| c
+)
+
+// --- Nested parens: each resets independently ---
+let parenNest : int = (
+  1 + (
+    2 + 3
+  )
+)
+
+// =============================================================================
+// COMBINED / EDGE CASES
+// =============================================================================
+
+// --- let inside match arm with continuation ---
+let combo (xs : []int) => int =
+  match xs with
+    | [] => 0
+    | x :: rest =>
+      let doubled : int =
+        x
+          * 2
+      doubled
+
+// --- Multiline func body as let RHS (not inside parens) ---
+let funcMultiLine : (int => int) =
+  func (x : int) => int =
+    fmt.Println "computing"
+    x * 2
+
+let applyToTen (f : (int => int)) => int = f 10
+
+// --- Multiline lambda passed as argument, inside parens ---
+let comboLambda () => () =
+  fmt.Println (applyToTen (
+    func (x : int) => int =
+      let y : int = x + 1
+      y * 2
+  ))
+
+let main () => () =
+  // Rule 1: line-indent
+  fmt.Println standard                  // 1
+  fmt.Println wideIndent                // 42
+  multiItem ()                          // "a", "b", "c"
+  fmt.Println (nested)                  // 4
+
+  // Rule 1: line fold (continuation)
+  fmt.Println folded                    // 6
+  foldedThenStmt ()                     // prints "after the expression"
+  fmt.Println (deepFold)                // 10
+
+  // Rule 2: line-indent exception
+  fmt.Println (orChain true false true) // true
+  fmt.Println (andChain true true true true) // true
+  fmt.Println (bitwiseOrFlat 5 3)      // 7 (5 ||| 3)
+  fmt.Println (mulChain 5)             // 30
+  // minusAmbig ()                      // commented out: unary minus not yet implemented
+  fmt.Println (minusCont)               // 7
+  fmt.Println (compared 5)             // true
+
+  // Rule 2: match arms (line-indent exception)
+  fmt.Println (matchStd 0)             // "zero"
+  fmt.Println (matchStd 1)             // "one"
+  fmt.Println (matchStd 42)            // "other"
+  fmt.Println (matchMessy 0)            // "zero"
+  fmt.Println (matchMessy 1)            // "one"
+  fmt.Println (matchMessy 42)           // "other"
+  fmt.Println (matchNested 0 0)        // "both zero"
+  fmt.Println (matchNested 0 1)        // "x zero"
+  fmt.Println (matchFlush 0)           // "zero"
+  fmt.Println (matchBitwiseOr 1 4)     // 7 (4 ||| 3)
+  fmt.Println (matchBitwiseOr 2 4)     // 4
+  fmt.Println (matchBitwiseOrFlat 1 4) // 7 (4 ||| 3)
+  fmt.Println (matchBitwiseOrFlat 2 4) // 4
+  fmt.Println (matchPipeAtLineIndent 1)     // 10
+  fmt.Println (matchPipeAtLineIndent 2)     // 20
+  fmt.Println (matchPipeNoLHS 0)       // "zero"
+  fmt.Println (matchPipeNoLHS 1)       // "one"
+  fmt.Println (matchPipeNoLHS 42)      // "other"
+
+  // Sequences as expressions
+  fmt.Println (seqBody ())             // 42
+  fmt.Println (seqBranch 5)            // 5
+  fmt.Println (seqBranch (0 - 3))      // 3
+  fmt.Println (elseIfChain 1)          // "one"
+  fmt.Println (elseIfChain 2)          // "two"
+  fmt.Println (elseIfChain 3)          // "three"
+  fmt.Println (elseIfChain 99)         // "other"
+  fmt.Println (elseIfSeq 5)            // 5
+  fmt.Println (elseIfSeq 0)            // 0
+  fmt.Println (elseIfSeq (0 - 3))      // 3
+  fmt.Println (elseIfSeqCond 200)      // "big"
+  fmt.Println (elseIfSeqCond 50)       // "medium"
+  fmt.Println (elseIfSeqCond 5)        // "small"
+  fmt.Println (seqCond 5)              // 5
+  fmt.Println (seqCond (0 - 3))        // 3
+  fmt.Println seqParen                 // 8
+  fmt.Println (seqArm 0)              // 0
+  fmt.Println (seqArm 5)              // 10
+
+  // Parens reset layout
+  fmt.Println parenReset               // 42
+  fmt.Println (parenFlat true false true) // true
+  fmt.Println parenNest                // 6
+
+  // Combined / edge cases
+  fmt.Println (combo [3])              // 6
+  fmt.Println (combo [])               // 0
+  fmt.Println (funcMultiLine 5)        // 10
+  comboLambda ()                        // 22

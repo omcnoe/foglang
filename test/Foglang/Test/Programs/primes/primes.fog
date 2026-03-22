@@ -17,10 +17,11 @@ let trialDivision (count : int) => []int =
 
   let sieve (n : int) (candidates : []int) => []int =
     if n == 0 then []
-    else match candidates with
-      | [] => []
-      | x :: rest =>
-        x :: sieve (n - 1) (filterInts (func (y : int) => bool = y % x != 0) rest)
+    else
+      match candidates with
+        | [] => []
+        | x :: rest =>
+          x :: sieve (n - 1) (filterInts (func (y : int) => bool = y % x != 0) rest)
   sieve count (intRange 2 1 200000)
 
 // The genuine sieve
@@ -45,18 +46,20 @@ let primes (count : int) => []int =
 
   let sieve (n : int) (candidates : []int) (table : map[int][]int) => []int =
     if n == 0 then []
-    else match candidates with
-      | [] => []
-      | x :: rest =>
-        match table[x] with
-          | (_, false) =>
-            x :: sieve (n - 1) rest (addFactor table (firstOddMultiple x) x)
-          | (factors, true) =>
-            let table : map[int][]int =
-              foldFactors (func (m : map[int][]int) (p : int) => map[int][]int =
-                addFactor m (nextOddMultiple x p) p
-              ) (mapDelete table x) factors
-            sieve n rest table
+    else
+      match candidates with
+        | [] => []
+        | x :: rest =>
+          match table[x] with
+            | (_, false) =>
+              x :: sieve (n - 1) rest (addFactor table (firstOddMultiple x) x)
+            | (factors, true) =>
+              let table : map[int][]int =
+                foldFactors (
+                  func (m : map[int][]int) (p : int) => map[int][]int =
+                    addFactor m (nextOddMultiple x p) p
+                ) (mapDelete table x) factors
+              sieve n rest table
   if count < 1 then []
   else 2 :: sieve (count - 1) (intRange 3 2 200000) {}
 

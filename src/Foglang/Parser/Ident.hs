@@ -40,7 +40,9 @@ reserved =
       "var",
       -- foglang
       "let",
-      "then"
+      "then",
+      "match",
+      "with"
     ]
 
 -- identifier = letter { letter | unicode_digit } .
