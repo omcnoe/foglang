@@ -1,4 +1,4 @@
-module Foglang.Parser.Digits (digitSeq, decimalDigits, binaryDigits, octalDigits, hexDigits) where
+module Foglang.Parser.Digits (decimalDigits, binaryDigits, octalDigits, hexDigits) where
 
 import Data.Char (isDigit, isHexDigit, isOctDigit)
 import Data.Text qualified as T

@@ -19,35 +19,35 @@ decimalLit :: Parser IntLit
 decimalLit =
   parseZero <|> parseDigits
   where
-    parseZero = Decimal <$> string "0"
+    parseZero = IntDecimal <$> string "0"
     parseDigits = do
       first <- satisfy (\c -> c >= '1' && c <= '9')
       rest <- option "" $ do
         sep <- option "" (string "_")
         digits <- decimalDigits
         return $ sep <> digits
-      return $ Decimal $ T.cons first rest
+      return $ IntDecimal $ T.cons first rest
 
 binaryLit :: Parser IntLit
 binaryLit = do
   prefix <- string' "0b"
   sep <- option "" (string "_")
   digits <- binaryDigits
-  return $ Binary $ prefix <> sep <> digits
+  return $ IntBinary $ prefix <> sep <> digits
 
 octalLit :: Parser IntLit
 octalLit = do
   prefix <- string' "0o" <|> string "0"
   sep <- option "" (string "_")
   digits <- octalDigits
-  return $ Octal $ prefix <> sep <> digits
+  return $ IntOctal $ prefix <> sep <> digits
 
 hexLit :: Parser IntLit
 hexLit = do
   prefix <- string' "0x"
   sep <- option "" (string "_")
   digits <- hexDigits
-  return $ Hex $ prefix <> sep <> digits
+  return $ IntHex $ prefix <> sep <> digits
 
 intLit :: Parser IntLit
 intLit = try binaryLit <|> try octalLit <|> try hexLit <|> decimalLit

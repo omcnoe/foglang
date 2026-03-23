@@ -1,39 +1,39 @@
 module Foglang.Parser.Patterns (pattern') where
 
 import Foglang.AST (Pattern (..))
-import Foglang.Parser (Parser, keyword, scn)
+import Foglang.Parser (Parser, SC, keyword)
 import Foglang.Parser.Ident (ident)
 import Foglang.Parser.IntLit (intLit)
 import Text.Megaparsec (sepBy1, try, (<|>))
 import Text.Megaparsec.Char.Lexer qualified as L (lexeme, symbol)
 
-pattern' :: Parser Pattern
-pattern' =
-  try consPattern
-    <|> try tuplePattern
-    <|> atomicPattern
+pattern' :: SC -> Parser Pattern
+pattern' sc' =
+  try (consPattern sc')
+    <|> try (tuplePattern sc')
+    <|> atomicPattern sc'
 
-consPattern :: Parser Pattern
-consPattern = do
-  hd <- try tuplePattern <|> atomicPattern
-  _ <- L.symbol scn "::"
-  tl <- pattern'
-  return $ PCons hd tl
+consPattern :: SC -> Parser Pattern
+consPattern sc' = do
+  hd <- try (tuplePattern sc') <|> atomicPattern sc'
+  _ <- L.symbol sc' "::"
+  tl <- pattern' sc'
+  return $ PtCons hd tl
 
-atomicPattern :: Parser Pattern
-atomicPattern =
-  try (PSliceEmpty <$ L.symbol scn "[]")
-    <|> (PBoolLit True <$ L.lexeme scn (keyword "true"))
-    <|> (PBoolLit False <$ L.lexeme scn (keyword "false"))
-    <|> try (PIntLit <$> L.lexeme scn intLit)
-    <|> try (PWildcard <$ L.lexeme scn (keyword "_"))
-    <|> (PVar <$> L.lexeme scn ident)
+atomicPattern :: SC -> Parser Pattern
+atomicPattern sc' =
+  try (PtSliceEmpty <$ L.symbol sc' "[]")
+    <|> (PtBoolLit True <$ L.lexeme sc' (keyword "true"))
+    <|> (PtBoolLit False <$ L.lexeme sc' (keyword "false"))
+    <|> try (PtIntLit <$> L.lexeme sc' intLit)
+    <|> try (PtWildcard <$ L.lexeme sc' (keyword "_"))
+    <|> (PtVar <$> L.lexeme sc' ident)
 
-tuplePattern :: Parser Pattern
-tuplePattern = do
-  _ <- L.symbol scn "("
-  first <- pattern'
-  _ <- L.symbol scn ","
-  rest <- sepBy1 pattern' (L.symbol scn ",")
-  _ <- L.symbol scn ")"
-  return $ PTuple (first : rest)
+tuplePattern :: SC -> Parser Pattern
+tuplePattern sc' = do
+  _ <- L.symbol sc' "("
+  first <- pattern' sc'
+  _ <- L.symbol sc' ","
+  rest <- sepBy1 (pattern' sc') (L.symbol sc' ",")
+  _ <- L.symbol sc' ")"
+  return $ PtTuple (first : rest)

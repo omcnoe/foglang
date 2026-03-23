@@ -292,7 +292,7 @@ func main() {
 	fmt.Println(parenFlat(true, false, true))
 	fmt.Println(parenNest)
 	fmt.Println(combo([]int{3}))
-	fmt.Println(combo(nil))
+	fmt.Println(combo([]int{}))
 	fmt.Println(funcMultiLine(5))
 	comboLambda()
 }

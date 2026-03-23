@@ -1,0 +1,64 @@
+package main
+
+import "fmt"
+
+// Value binding with inferred string type
+let greeting = "hello"
+
+// Float literal defaults to float64
+let pi = 3.14
+
+// Bool from prelude environment
+let flag = true
+
+// Fully inferred function types via arithmetic
+let add x y = x + y + 1
+
+// Partially annotated, return type inferred
+let double (x : int) = x * 2
+
+// Recursive function with inferred types
+let fib n =
+  if n < 2
+  then n
+  else fib (n - 1) + fib (n - 2)
+
+// Comparison returns bool, operand type inferred from literal
+let is_positive x = x > 0
+
+// If/then/else with inferred return type
+let abs_val (x : int) =
+  if x < 0
+  then 0 - x
+  else x
+
+// Slice literal with inferred element type
+let nums = [1, 2, 3]
+
+// Index expression: infers int element from []int
+let first (xs : []int) = xs[0]
+
+// Logical operators infer bool
+let both x y = x && y
+
+// Higher-order function with annotated param, inferred return
+let apply_fn (f : (int => int)) (x : int) = f x
+
+// Lambda as argument — anonymous func with inferred types
+let apply_lambda (x : int) = apply_fn (func (n : int) => int = n * 3) x
+
+// Main using all of them
+let main () => () =
+  fmt.Println greeting
+  fmt.Println pi
+  fmt.Println flag
+  fmt.Println (add 2 3)
+  fmt.Println (double 5)
+  fmt.Println (fib 10)
+  fmt.Println (is_positive 5)
+  fmt.Println (abs_val (0 - 3))
+  fmt.Println nums
+  fmt.Println (first nums)
+  fmt.Println (both true false)
+  fmt.Println (apply_fn double 7)
+  fmt.Println (apply_lambda 4)

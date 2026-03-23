@@ -36,25 +36,25 @@ decimalFloatLit = try withDot <|> try digitsExp <|> dotFirst
       _ <- string "."
       frac <- option "" decimalDigits
       exp' <- option "" decimalExponent
-      return $ DecimalFloat $ int <> "." <> frac <> exp'
+      return $ FloatDecimal $ int <> "." <> frac <> exp'
 
     digitsExp = do
       int <- decimalDigits
       exp' <- decimalExponent
-      return $ DecimalFloat $ int <> exp'
+      return $ FloatDecimal $ int <> exp'
 
     dotFirst = do
       _ <- string "."
       frac <- decimalDigits
       exp' <- option "" decimalExponent
-      return $ DecimalFloat $ "." <> frac <> exp'
+      return $ FloatDecimal $ "." <> frac <> exp'
 
 hexFloatLit :: Parser FloatLit
 hexFloatLit = do
   prefix <- string' "0x"
   mantissa <- try withDot <|> withDigits <|> dotFirst
   exp' <- hexExponent
-  return $ HexFloat $ prefix <> mantissa <> exp'
+  return $ FloatHex $ prefix <> mantissa <> exp'
   where
     hexExponent = do
       p <- satisfy (\c -> c == 'p' || c == 'P')

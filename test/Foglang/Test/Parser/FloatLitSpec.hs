@@ -1,30 +1,31 @@
 module Foglang.Test.Parser.FloatLitSpec (spec) where
 
+import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (FloatLit (..))
 import Foglang.Parser.FloatLit (floatLit)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, parse)
+import Text.Megaparsec (eof, runParserT)
 
 spec :: Spec
 spec = do
   let specValid =
-        [ ("0.", DecimalFloat),
-          ("72.40", DecimalFloat),
-          ("072.40", DecimalFloat), --    == 72.40
-          ("2.71828", DecimalFloat),
-          ("1.e+0", DecimalFloat),
-          ("6.67428e-11", DecimalFloat),
-          ("1E6", DecimalFloat),
-          (".25", DecimalFloat),
-          (".12345E+5", DecimalFloat),
-          ("1_5.", DecimalFloat), --      == 15.0
-          ("0.15e+0_2", DecimalFloat), -- == 15.0
-          ("0x1p-2", HexFloat), --        == 0.25
-          ("0x2.p10", HexFloat), --       == 2048.0
-          ("0x1.Fp+0", HexFloat), --      == 1.9375
-          ("0X.8p-0", HexFloat), --       == 0.5
-          ("0X_1FFFP-16", HexFloat) --    == 0.1249847412109375
+        [ ("0.", FloatDecimal),
+          ("72.40", FloatDecimal),
+          ("072.40", FloatDecimal), --    == 72.40
+          ("2.71828", FloatDecimal),
+          ("1.e+0", FloatDecimal),
+          ("6.67428e-11", FloatDecimal),
+          ("1E6", FloatDecimal),
+          (".25", FloatDecimal),
+          (".12345E+5", FloatDecimal),
+          ("1_5.", FloatDecimal), --      == 15.0
+          ("0.15e+0_2", FloatDecimal), -- == 15.0
+          ("0x1p-2", FloatHex), --        == 0.25
+          ("0x2.p10", FloatHex), --       == 2048.0
+          ("0x1.Fp+0", FloatHex), --      == 1.9375
+          ("0X.8p-0", FloatHex), --       == 0.5
+          ("0X_1FFFP-16", FloatHex) --    == 0.1249847412109375
         ]
 
   let specInvalid =
@@ -39,7 +40,7 @@ spec = do
           "1.5e1_" --    invalid: _ must separate successive digits
         ]
 
-  let parseFloatLit s = parse (floatLit <* eof) "FloatLitSpec.hs" s
+  let parseFloatLit s = evalState (runParserT (floatLit <* eof) "FloatLitSpec.hs" s) 0
 
   describe "floatLit parses" $ do
     it "go spec examples" $

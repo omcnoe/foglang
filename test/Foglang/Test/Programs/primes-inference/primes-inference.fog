@@ -1,0 +1,78 @@
+package main
+
+import "fmt"
+
+// Genuine Sieve of Eratosthenes
+// Based on O'Neill, "The Genuine Sieve of Eratosthenes" (JFP 2009)
+
+// The unfaithful sieve (trial division, included for comparison)
+let trialDivision count =
+  // Filter integers by predicate
+  let filterInts pred (xs : []int) =
+    match xs with
+      | [] => []
+      | x :: rest =>
+        if pred x then x :: filterInts pred rest
+        else filterInts pred rest
+
+  let sieve n (candidates : []int) =
+    if n == 0 then []
+    else
+      match candidates with
+        | [] => []
+        | x :: rest =>
+          x :: sieve (n - 1) (filterInts (func y = y % x != 0) rest)
+  sieve count (intRange 2 1 200000)
+
+// The genuine sieve
+let primes count => []int =
+  let nextOddMultiple after p =
+    let candidate = after + 2 * p
+    if candidate % 2 != 0 then candidate
+    else after + 3 * p
+
+  let firstOddMultiple p =
+    nextOddMultiple 0 p
+
+  let addFactor (table : map[int][]int) composite prime => map[int][]int =
+    match table[composite] with
+      | (existing, true) => mapInsert table composite (append existing prime)
+      | (_, false) => mapInsert table composite [prime]
+
+  let foldFactors (f : (map[int][]int -> int => map[int][]int)) (acc : map[int][]int) (xs : []int) =
+    match xs with
+      | [] => acc
+      | x :: rest => foldFactors f (f acc x) rest
+
+  let sieve n (candidates : []int) (table : map[int][]int) =
+    if n == 0 then []
+    else
+      match candidates with
+        | [] => []
+        | x :: rest =>
+          match table[x] with
+            | (_, false) =>
+              x :: sieve (n - 1) rest (addFactor table (firstOddMultiple x) x)
+            | (factors, true) =>
+              let table : map[int][]int =
+                foldFactors (
+                  func (m : map[int][]int) p => map[int][]int =
+                    addFactor m (nextOddMultiple x p) p
+                ) (mapDelete table x) factors
+              sieve n rest table
+  if count < 1 then []
+  else 2 :: sieve (count - 1) (intRange 3 2 200000) {}
+
+let main () =
+  // stack overflows
+  // let slow : []int = trialDivision 10000
+  // fmt.Println "unfaithful sieve:"
+  // fmt.Println (len slow)
+  // fmt.Println slow[len slow - 1]
+
+  let fast = primes 10000
+  fmt.Println "genuine sieve:"
+  fmt.Println (len fast)
+  fmt.Println fast[len fast - 1]
+
+  ()

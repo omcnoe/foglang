@@ -6,14 +6,14 @@ var sliceCompact []int = []int{1, 2, 3}
 var sliceSpaced []int = []int{4, 5, 6}
 var sliceNested [][]int = [][]int{[]int{1, 2}, []int{3, 4}}
 var sliceNestedSpaced [][]int = [][]int{[]int{7, 8}, []int{9, 10}}
-var mapCompact map[string]int = nil
-var mapSpaced map[string]int = nil
-var mapWideSpaced map[string]int = nil
-var mapSliceVal map[int][]int = nil
-var mapSliceValSpaced map[int][]int = nil
+var mapCompact map[string]int = map[string]int{}
+var mapSpaced map[string]int = map[string]int{}
+var mapWideSpaced map[string]int = map[string]int{}
+var mapSliceVal map[int][]int = map[int][]int{}
+var mapSliceValSpaced map[int][]int = map[int][]int{}
 var sliceFolded []int = []int{100}
-var mapFolded map[int][]int = nil
-var mapKeyFolded map[int][]string = nil
+var mapFolded map[int][]int = map[int][]int{}
+var mapKeyFolded map[int][]string = map[int][]string{}
 
 func f1(x int) int {
 	return (x * 2)

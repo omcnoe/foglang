@@ -1,34 +1,35 @@
 module Foglang.Test.Parser.IntLitSpec (spec) where
 
+import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (IntLit (..))
 import Foglang.Parser.IntLit (intLit)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, parse)
+import Text.Megaparsec (eof, runParserT)
 
 spec :: Spec
 spec = do
   let specValid =
-        [ ("42", Decimal),
-          ("4_2", Decimal),
-          ("0600", Octal),
-          ("0_600", Octal),
-          ("0o600", Octal),
-          ("0O600", Octal),
-          ("0xBadFace", Hex),
-          ("0xBad_Face", Hex),
-          ("0x_67_7a_2f_cc_40_c6", Hex),
-          ("170141183460469231731687303715884105727", Decimal),
-          ("170_141183_460469_231731_687303_715884_105727", Decimal)
+        [ ("42", IntDecimal),
+          ("4_2", IntDecimal),
+          ("0600", IntOctal),
+          ("0_600", IntOctal),
+          ("0o600", IntOctal),
+          ("0O600", IntOctal),
+          ("0xBadFace", IntHex),
+          ("0xBad_Face", IntHex),
+          ("0x_67_7a_2f_cc_40_c6", IntHex),
+          ("170141183460469231731687303715884105727", IntDecimal),
+          ("170_141183_460469_231731_687303_715884_105727", IntDecimal)
         ]
 
   let extraValid =
-        [ ("0", Decimal),
-          ("1", Decimal),
-          ("0b1010", Binary),
-          ("0B0000", Binary),
-          ("0b_1010", Binary),
-          ("0o_600", Octal)
+        [ ("0", IntDecimal),
+          ("1", IntDecimal),
+          ("0b1010", IntBinary),
+          ("0B0000", IntBinary),
+          ("0b_1010", IntBinary),
+          ("0o_600", IntOctal)
         ]
 
   let specInvalid =
@@ -45,7 +46,7 @@ spec = do
           "0X__0"
         ]
 
-  let parseIntLit s = parse (intLit <* eof) "IntLitSpec.hs" s
+  let parseIntLit s = evalState (runParserT (intLit <* eof) "IntLitSpec.hs" s) 0
 
   describe "intLit parses" $ do
     it "go spec examples" $

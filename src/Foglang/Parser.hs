@@ -1,9 +1,11 @@
-module Foglang.Parser (isGoLetter, Parser, SC, scn, keyword) where
+module Foglang.Parser (isGoLetter, Parser, SC, scn, keyword, freshTVar, freshConstrained) where
 
+import Control.Monad.State.Strict (State, get, put)
 import Data.Char (isDigit, isLetter)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Text.Megaparsec (Parsec, notFollowedBy, satisfy, try)
+import Foglang.AST (TypeExpr (..), TypeSet)
+import Text.Megaparsec (ParsecT, notFollowedBy, satisfy, try)
 import Text.Megaparsec.Char (space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
@@ -11,7 +13,7 @@ import Text.Megaparsec.Char.Lexer qualified as L
 isGoLetter :: Char -> Bool
 isGoLetter c = isLetter c || c == '_'
 
-type Parser = Parsec Void T.Text
+type Parser = ParsecT Void T.Text (State Int)
 
 -- A space consumer is just a Parser ()
 type SC = Parser ()
@@ -28,3 +30,18 @@ keyword w = try $ do
   t <- string w
   notFollowedBy (satisfy (\c -> isGoLetter c || isDigit c)) -- disambiguate from a possible Ident prefix
   return t
+
+-- Mint a fresh type variable with a globally unique ID.
+-- Uses State as the inner monad so IDs never backtrack on parse failures.
+freshTVar :: Parser TypeExpr
+freshTVar = do
+  n <- get
+  put (n + 1)
+  return (TVar n)
+
+-- Mint a fresh constrained type variable (for numeric literals).
+freshConstrained :: TypeSet -> Parser TypeExpr
+freshConstrained s = do
+  n <- get
+  put (n + 1)
+  return (TConstrained n s)

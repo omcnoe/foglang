@@ -1,13 +1,12 @@
-module Foglang.Parser.Ident (ident, qualIdent, headerIdent) where
+module Foglang.Parser.Ident (ident, qualIdent) where
 
 import Data.Char (isDigit)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foglang.AST (Ident (..))
-import Foglang.Parser (Parser, isGoLetter, scn)
+import Foglang.Parser (Parser, isGoLetter)
 import Text.Megaparsec (many, satisfy, takeWhileP, try)
 import Text.Megaparsec.Char (char)
-import Text.Megaparsec.Char.Lexer qualified as L
 
 reserved :: Set.Set T.Text
 reserved =
@@ -46,9 +45,10 @@ reserved =
     ]
 
 -- identifier = letter { letter | unicode_digit } .
--- No trailing whitespace consumed.
+-- No trailing whitespace consumed. No try — callers must handle backtracking
+-- explicitly (via try) when ident is one of several alternatives.
 ident :: Parser Ident
-ident = try $ do
+ident = do
   c <- satisfy isGoLetter
   cs <- takeWhileP Nothing (\ch -> isGoLetter ch || isDigit ch)
   let raw = c `T.cons` cs
@@ -64,7 +64,3 @@ qualIdent = try $ do
   first <- ident
   rest <- many (try (char '.' *> ident))
   return $ Ident $ T.intercalate "." $ map (\(Ident t) -> t) (first : rest)
-
--- Plain identifier for use in file headers (package names, import aliases).
-headerIdent :: Parser Ident
-headerIdent = L.lexeme scn ident
