@@ -3,19 +3,18 @@ module Foglang.Parser.Header (header) where
 import Data.Char (isPrint, isSpace)
 import Data.Text qualified as T
 import Foglang.AST (Header (..), Ident (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
-import Foglang.Parser (Parser, keyword, scn)
+import Foglang.Parser (Parser, keyword, lexeme, scn, symbol)
 import Foglang.Parser.Ident (ident)
 import Text.Megaparsec (between, many, takeWhileP, try, (<|>))
 import Text.Megaparsec.Char (char)
-import Text.Megaparsec.Char.Lexer qualified as L
 
 import' :: Parser ImportDecl
 import' = do
   alias <-
-    (Dot <$ L.symbol scn ".")
-      <|> try (toAlias <$> L.lexeme scn ident)
+    (Dot <$ symbol scn ".")
+      <|> try (toAlias <$> lexeme scn ident)
       <|> return Default
-  path <- L.lexeme scn $ do
+  path <- lexeme scn $ do
     _ <- char '"'
     path <- takeWhileP Nothing (/= '"')
     _ <- char '"'
@@ -38,17 +37,17 @@ import' = do
         illegalChars = "!\"#$%&'()*,:;<=>?[\\]^`{|}\xFFFD"
 
 groupedImports :: Parser [ImportDecl]
-groupedImports = between (L.symbol scn "(") (L.symbol scn ")") (many import')
+groupedImports = between (symbol scn "(") (symbol scn ")") (many import')
 
 importDecl :: Parser [ImportDecl]
 importDecl = do
-  _ <- L.lexeme scn (keyword "import")
+  _ <- lexeme scn (keyword "import")
   (: []) <$> import' <|> groupedImports
 
 packageClause :: Parser PackageClause
 packageClause = do
-  _ <- L.lexeme scn (keyword "package")
-  PackageClause <$> L.lexeme scn ident
+  _ <- lexeme scn (keyword "package")
+  PackageClause <$> lexeme scn ident
 
 header :: Parser Header
 header = do

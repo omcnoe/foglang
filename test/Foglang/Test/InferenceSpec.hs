@@ -4,7 +4,7 @@ import Control.Monad.State.Strict (evalState)
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
-import Foglang.Parser (scn)
+import Foglang.Parser (SC(..), scn)
 import Foglang.Parser.Expr (sequence')
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, runParserT)
@@ -12,7 +12,7 @@ import Text.Megaparsec.Pos (mkPos)
 
 -- Parse a fog expression string into an Expr.
 parseExpr :: T.Text -> Either String Expr
-parseExpr s = case evalState (runParserT (sequence' Nothing (mkPos 1) <* scn <* eof) "test" s) 0 of
+parseExpr s = case evalState (runParserT (sequence' Nothing (mkPos 1) <* runSC scn <* eof) "test" s) 0 of
   Left err -> Left (show err)
   Right expr -> Right expr
 

@@ -3,7 +3,7 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
-import Foglang.Parser (scn)
+import Foglang.Parser (SC(..), scn)
 import Foglang.Parser.Expr (sequence')
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, runParserT)
@@ -216,7 +216,7 @@ spec = do
           )
         ]
 
-  let parseExpr s = evalState (runParserT (sequence' Nothing (mkPos 1) <* scn <* eof) "ExprSpec.hs" s) 0
+  let parseExpr s = evalState (runParserT (sequence' Nothing (mkPos 1) <* runSC scn <* eof) "ExprSpec.hs" s) 0
 
   describe "sequence parses" $ do
     it "let" $
