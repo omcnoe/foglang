@@ -71,3 +71,16 @@ let map[T comparable, U int64 | float64] (f : T => U) -> (xs : []T) => []U = ...
 This keeps `=>` unambiguously meaning "returns" throughout the language.
 
 **Generics will be implemented in the future.** For now they are not to be implemented in the type system.
+
+### Opaque type (known limitation)
+
+Qualified Go names (e.g. `fmt.Println`, `os.Args`) have type `opaque` in fog's type system — their real Go types are not modeled. `opaque` unifies freely with any type during inference, which means type errors involving opaque expressions are not caught at compile time. This can produce invalid Go code, for example:
+
+```
+let f (x : int) => struct{} =
+  fmt.Println "zero"
+```
+
+Generates `return fmt.Println("zero")` — invalid because `fmt.Println` returns `(int, error)`, not `struct{}`. The Go compiler will catch this, but fog won't.
+
+This is not a bug to fix piecemeal — any position where opaque flows into a concrete type context is potentially wrong (return values, arguments, bindings, operators). The real fix is modeling Go function signatures with real types, which will eliminate opaque. Until then, opaque means "trust the programmer, defer type checking to `go build`."
