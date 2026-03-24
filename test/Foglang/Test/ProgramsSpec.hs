@@ -4,7 +4,7 @@ import Control.Monad.State.Strict (evalState)
 import Data.FileEmbed (embedStringFile)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Foglang.Codegen (codegenGoFile)
+import Foglang.Codegen (genGoFile)
 import Foglang.Parser.FogFile (fogFile)
 import Foglang.Test.Util (shouldParseAndCodegenTo)
 import Test.Hspec (Spec, describe, it)
@@ -126,56 +126,56 @@ primesInferenceGoSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/prim
 spec :: Spec
 spec = describe "programs" $ do
   it "fibonacci.fog -> fibonacci.go" $
-    fmap codegenGoFile (runFogParser "fibonacci.fog" fibonacciFogSrc)
+    fmap genGoFile (runFogParser "fibonacci.fog" fibonacciFogSrc)
       `shouldParseAndCodegenTo` fibonacciGoSrc
   it "helloworld.fog -> helloworld.go" $
-    fmap codegenGoFile (runFogParser "helloworld.fog" helloWorldFogSrc)
+    fmap genGoFile (runFogParser "helloworld.fog" helloWorldFogSrc)
       `shouldParseAndCodegenTo` helloWorldGoSrc
   it "lambda.fog -> lambda.go" $
-    fmap codegenGoFile (runFogParser "lambda.fog" lambdaFogSrc)
+    fmap genGoFile (runFogParser "lambda.fog" lambdaFogSrc)
       `shouldParseAndCodegenTo` lambdaGoSrc
   it "leapyear.fog -> leapyear.go" $
-    fmap codegenGoFile (runFogParser "leapyear.fog" leapYearFogSrc)
+    fmap genGoFile (runFogParser "leapyear.fog" leapYearFogSrc)
       `shouldParseAndCodegenTo` leapYearGoSrc
   it "indentation.fog -> indentation.go" $
-    fmap codegenGoFile (runFogParser "indentation.fog" indentationFogSrc)
+    fmap genGoFile (runFogParser "indentation.fog" indentationFogSrc)
       `shouldParseAndCodegenTo` indentationGoSrc
   it "nestedif.fog -> nestedif.go" $
-    fmap codegenGoFile (runFogParser "nestedif.fog" nestedIfFogSrc)
+    fmap genGoFile (runFogParser "nestedif.fog" nestedIfFogSrc)
       `shouldParseAndCodegenTo` nestedIfGoSrc
   it "newton.fog -> newton.go" $
-    fmap codegenGoFile (runFogParser "newton.fog" newtonFogSrc)
+    fmap genGoFile (runFogParser "newton.fog" newtonFogSrc)
       `shouldParseAndCodegenTo` newtonGoSrc
   it "packagelevel.fog -> packagelevel.go" $
-    fmap codegenGoFile (runFogParser "packagelevel.fog" packageLevelFogSrc)
+    fmap genGoFile (runFogParser "packagelevel.fog" packageLevelFogSrc)
       `shouldParseAndCodegenTo` packageLevelGoSrc
   it "partialapplication.fog -> partialapplication.go" $
-    fmap codegenGoFile (runFogParser "partialapplication.fog" partialApplicationFogSrc)
+    fmap genGoFile (runFogParser "partialapplication.fog" partialApplicationFogSrc)
       `shouldParseAndCodegenTo` partialApplicationGoSrc
   it "stmtexpr.fog -> stmtexpr.go" $
-    fmap codegenGoFile (runFogParser "stmtexpr.fog" stmtExprFogSrc)
+    fmap genGoFile (runFogParser "stmtexpr.fog" stmtExprFogSrc)
       `shouldParseAndCodegenTo` stmtExprGoSrc
   it "variadic.fog -> variadic.go" $
-    fmap codegenGoFile (runFogParser "variadic.fog" variadicFogSrc)
+    fmap genGoFile (runFogParser "variadic.fog" variadicFogSrc)
       `shouldParseAndCodegenTo` variadicGoSrc
   it "unit.fog -> unit.go" $
-    fmap codegenGoFile (runFogParser "unit.fog" unitFogSrc)
+    fmap genGoFile (runFogParser "unit.fog" unitFogSrc)
       `shouldParseAndCodegenTo` unitGoSrc
   it "slices.fog -> slices.go" $
-    fmap codegenGoFile (runFogParser "slices.fog" slicesFogSrc)
+    fmap genGoFile (runFogParser "slices.fog" slicesFogSrc)
       `shouldParseAndCodegenTo` slicesGoSrc
   it "patterns.fog -> patterns.go" $
-    fmap codegenGoFile (runFogParser "patterns.fog" patternsFogSrc)
+    fmap genGoFile (runFogParser "patterns.fog" patternsFogSrc)
       `shouldParseAndCodegenTo` patternsGoSrc
   it "primes.fog -> primes.go" $
-    fmap codegenGoFile (runFogParser "primes.fog" primesFogSrc)
+    fmap genGoFile (runFogParser "primes.fog" primesFogSrc)
       `shouldParseAndCodegenTo` primesGoSrc
   it "types.fog -> types.go" $
-    fmap codegenGoFile (runFogParser "types.fog" typesFogSrc)
+    fmap genGoFile (runFogParser "types.fog" typesFogSrc)
       `shouldParseAndCodegenTo` typesGoSrc
   it "inference.fog -> inference.go" $
-    fmap codegenGoFile (runFogParser "inference.fog" inferenceFogSrc)
+    fmap genGoFile (runFogParser "inference.fog" inferenceFogSrc)
       `shouldParseAndCodegenTo` inferenceGoSrc
   it "primes-inference.fog -> primes-inference.go" $
-    fmap codegenGoFile (runFogParser "primes-inference.fog" primesInferenceFogSrc)
+    fmap genGoFile (runFogParser "primes-inference.fog" primesInferenceFogSrc)
       `shouldParseAndCodegenTo` primesInferenceGoSrc

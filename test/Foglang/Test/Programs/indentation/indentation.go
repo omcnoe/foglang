@@ -12,7 +12,15 @@ func multiItem() {
 }
 
 var nested int = func() int {
-	a := func() int { b := func() int { c := 1; _ = c; return (c + 1) }(); _ = b; return (b + 1) }()
+	a := func() int {
+		b := func() int {
+			c := 1
+			_ = c
+			return (c + 1)
+		}()
+		_ = b
+		return (b + 1)
+	}()
 	_ = a
 	return (a + 1)
 }()
@@ -147,7 +155,11 @@ func seqBranch(x int) int {
 	}
 }
 func seqCond(x int) int {
-	if func() bool { positive := (x > 0); _ = positive; return positive }() {
+	if func() bool {
+		positive := (x > 0)
+		_ = positive
+		return positive
+	}() {
 		return x
 	} else {
 		return (0 - x)
@@ -177,16 +189,28 @@ func elseIfSeq(x int) int {
 	}
 }
 func elseIfSeqCond(x int) string {
-	if func() bool { big := (x > 100); _ = big; return big }() {
+	if func() bool {
+		big := (x > 100)
+		_ = big
+		return big
+	}() {
 		return "big"
-	} else if func() bool { medium := (x > 10); _ = medium; return medium }() {
+	} else if func() bool {
+		medium := (x > 10)
+		_ = medium
+		return medium
+	}() {
 		return "medium"
 	} else {
 		return "small"
 	}
 }
 
-var seqParen int = func() int { x := 7; _ = x; return (x + 1) }()
+var seqParen int = func() int {
+	x := 7
+	_ = x
+	return (x + 1)
+}()
 
 func seqArm(x int) int {
 	_scrut1 := x
@@ -202,7 +226,11 @@ func seqArm(x int) int {
 	}
 }
 
-var parenReset int = func() int { f := func(x int) int { return (x * 2) }; _ = f; return f(21) }()
+var parenReset int = func() int {
+	f := func(x int) int { return (x * 2) }
+	_ = f
+	return f(21)
+}()
 
 func parenFlat(a bool, b bool, c bool) bool {
 	return ((a || b) || c)
@@ -236,7 +264,13 @@ func applyToTen(f func(int) int) int {
 	return f(10)
 }
 func comboLambda() {
-	fmt.Println(applyToTen(func(x int) int { return func() int { y := (x + 1); _ = y; return (y * 2) }() }))
+	fmt.Println(applyToTen(func(x int) int {
+		return func() int {
+			y := (x + 1)
+			_ = y
+			return (y * 2)
+		}()
+	}))
 }
 func main() {
 	fmt.Println(standard)

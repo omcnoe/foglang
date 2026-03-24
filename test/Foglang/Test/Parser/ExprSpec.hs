@@ -42,6 +42,8 @@ stripPos (EVariadicSpread _ e) =
   EVariadicSpread a (stripPos e)
 stripPos (EMatch _ scrut arms) =
   EMatch a (stripPos scrut) (map stripArmPos arms)
+stripPos (ECoerce _ c inner) =
+  ECoerce a c (stripPos inner)
 
 -- Normalize TypeExpr: replace TVars with the placeholder.
 stripType :: TypeExpr -> TypeExpr

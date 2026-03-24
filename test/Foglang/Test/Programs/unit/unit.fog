@@ -47,10 +47,10 @@ let withZeroCallback () => () =
 let withNamedZeroCallback () => () =
   applyZero zeroParam
 
-// Coerce (() => ()) to (() => struct{})
+// Coerce (() => ()) to (() => struct{}) — top-level
 let unitReturnCoercedToStruct : (() => struct{}) = zeroParam
 
-// Coerce (() => struct{}) to (() => ())
+// Coerce (() => struct{}) to (() => ()) — top-level
 let structReturnCoercedToUnit : (() => ()) = zeroParamStruct
 
 // Multi-param coercion helpers
@@ -59,10 +59,10 @@ let printInt (n : int) => () =
 
 let intToStruct (n : int) => struct{} = ()
 
-// Coerce (int => ()) to (int => struct{})
+// Coerce (int => ()) to (int => struct{}) — top-level
 let unitReturnCoercedToStructI : (int => struct{}) = printInt
 
-// Coerce (int => struct{}) to (int => ())
+// Coerce (int => struct{}) to (int => ()) — top-level
 let structReturnCoercedToUnitI : (int => ()) = intToStruct
 
 // Multi-() params: each () becomes struct{} (no zero-param rewrite)
@@ -73,10 +73,84 @@ let multiUnitParams () -> () -> () => () =
 let applyMultiUnit (f : (() -> () -> () => ())) => () =
   f () () ()
 
-// let in expression context with unit-typed RHS (tests genTExpr TLet)
+// let in expression context with unit-typed RHS (tests genExpr ELet)
 let discardUnit : int =
   let _ : () = zeroParam ()
   42
+
+// Local coercion: (() => ()) to (() => struct{})
+let localCoerceToStruct () => () =
+  let f : (() => struct{}) = zeroParam
+  f ()
+
+// Local coercion: (() => struct{}) to (() => ())
+let localCoerceToUnit () => () =
+  let f : (() => ()) = zeroParamStruct
+  f ()
+
+// Local coercion with params: (int => ()) to (int => struct{})
+let localCoerceParamToStruct () => () =
+  let f : (int => struct{}) = printInt
+  f 1
+
+// Local coercion with params: (int => struct{}) to (int => ())
+let localCoerceParamToUnit () => () =
+  let f : (int => ()) = intToStruct
+  f 2
+
+// Higher-order expecting (() => struct{}) — for argument coercion tests
+let applyExpectStruct (f : (() => struct{})) => () =
+  f ()
+
+// Argument coercion: pass (() => ()) where (() => struct{}) expected
+let argCoerceToStruct () => () =
+  applyExpectStruct zeroParam
+
+// Argument coercion: pass (() => struct{}) where (() => ()) expected
+let argCoerceToUnit () => () =
+  applyZero zeroParamStruct
+
+// Return coercion: body type (() => ()) but declared return (() => struct{})
+let getCoercedCallback () => (() => struct{}) = zeroParam
+
+// Return coercion: body type (() => struct{}) but declared return (() => ())
+let getCoercedCallbackUnit () => (() => ()) = zeroParamStruct
+
+// 1. Void if in expression context (genExprIIFE void+sideEffects for EIf)
+let voidIfInExpr () => int =
+  if true then zeroParam () else zeroParam ()
+  42
+
+// 2. Void match in expression context
+let voidMatchInExpr (x : int) => int =
+  match x with
+    | 0 => zeroParam ()
+    | _ => zeroParam ()
+  42
+
+// 3. Void sequence in expression context
+let voidSeqInExpr () => int =
+  zeroParam ()
+  zeroParam ()
+  42
+
+// 4. Named void binding in expression context (synthesized struct{}{})
+let namedVoidBinding () => int =
+  let u : () = zeroParam ()
+  fmt.Println u
+  42
+
+// 5. Void let as entire RHS with no continuation, inside value context
+let voidLetNoContinuation () => int =
+  let _ : () = zeroParam ()
+  42
+
+// 6. Call coerced callbacks end-to-end
+let callCoercedCallbacks () => () =
+  let f : (() => struct{}) = getCoercedCallback ()
+  f ()
+  let g : (() => ()) = getCoercedCallbackUnit ()
+  g ()
 
 let main () => () =
   zeroParam ()
@@ -96,3 +170,18 @@ let main () => () =
   multiUnitParams () () ()
   applyMultiUnit multiUnitParams
   fmt.Println discardUnit
+  localCoerceToStruct ()
+  localCoerceToUnit ()
+  localCoerceParamToStruct ()
+  localCoerceParamToUnit ()
+  argCoerceToStruct ()
+  argCoerceToUnit ()
+  getCoercedCallback ()
+  getCoercedCallbackUnit ()
+  fmt.Println (voidIfInExpr ())
+  fmt.Println (voidMatchInExpr 0)
+  fmt.Println (voidSeqInExpr ())
+  fmt.Println (namedVoidBinding ())
+  fmt.Println (voidLetNoContinuation ())
+  callCoercedCallbacks ()
+  ()

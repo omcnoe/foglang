@@ -8,7 +8,7 @@ import Text.Megaparsec (ParseErrorBundle, errorBundlePretty)
 
 -- | Like `shouldBe` for parse+codegen results, but prints raw text (with real
 -- newlines/tabs) as well as escaped string literals on failure.
--- The codegen result is IO T.Text because codegenGoFile uses gofmt for formatting.
+-- The codegen result is IO T.Text because genGoFile uses gofmt for formatting.
 shouldParseAndCodegenTo ::
   (HasCallStack) =>
   Either (ParseErrorBundle T.Text Void) (IO T.Text) ->

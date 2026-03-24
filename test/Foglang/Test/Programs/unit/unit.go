@@ -64,8 +64,88 @@ func applyMultiUnit(f func(struct{}, struct{}, struct{})) {
 	f(struct{}{}, struct{}{}, struct{}{})
 }
 
-var discardUnit int = func() int { zeroParam(); return 42 }()
+var discardUnit int = func() int {
+	zeroParam()
+	return 42
+}()
 
+func localCoerceToStruct() {
+	f := func() struct{} { zeroParam(); return struct{}{} }
+	_ = f
+	f()
+}
+func localCoerceToUnit() {
+	f := func() { zeroParamStruct() }
+	_ = f
+	f()
+}
+func localCoerceParamToStruct() {
+	f := func(_p0 int) struct{} { printInt(_p0); return struct{}{} }
+	_ = f
+	f(1)
+}
+func localCoerceParamToUnit() {
+	f := func(_p0 int) { intToStruct(_p0) }
+	_ = f
+	f(2)
+}
+func applyExpectStruct(f func() struct{}) {
+	f()
+}
+func argCoerceToStruct() {
+	applyExpectStruct(func() struct{} { zeroParam(); return struct{}{} })
+}
+func argCoerceToUnit() {
+	applyZero(func() { zeroParamStruct() })
+}
+func getCoercedCallback() func() struct{} {
+	return func() struct{} { zeroParam(); return struct{}{} }
+}
+func getCoercedCallbackUnit() func() {
+	return func() { zeroParamStruct() }
+}
+func voidIfInExpr() int {
+	if true {
+		zeroParam()
+	} else {
+		zeroParam()
+	}
+	return 42
+}
+func voidMatchInExpr(x int) int {
+	_scrut1 := x
+	_ = _scrut1
+	if _scrut1 == 0 {
+		zeroParam()
+	} else {
+		zeroParam()
+	}
+	return 42
+}
+func voidSeqInExpr() int {
+	zeroParam()
+	zeroParam()
+	return 42
+}
+func namedVoidBinding() int {
+	zeroParam()
+	u := struct{}{}
+	_ = u
+	fmt.Println(u)
+	return 42
+}
+func voidLetNoContinuation() int {
+	zeroParam()
+	return 42
+}
+func callCoercedCallbacks() {
+	f := getCoercedCallback()
+	_ = f
+	f()
+	g := getCoercedCallbackUnit()
+	_ = g
+	g()
+}
 func main() {
 	zeroParam()
 	structArg(struct{}{})
@@ -84,4 +164,18 @@ func main() {
 	multiUnitParams(struct{}{}, struct{}{}, struct{}{})
 	applyMultiUnit(multiUnitParams)
 	fmt.Println(discardUnit)
+	localCoerceToStruct()
+	localCoerceToUnit()
+	localCoerceParamToStruct()
+	localCoerceParamToUnit()
+	argCoerceToStruct()
+	argCoerceToUnit()
+	getCoercedCallback()
+	getCoercedCallbackUnit()
+	fmt.Println(voidIfInExpr())
+	fmt.Println(voidMatchInExpr(0))
+	fmt.Println(voidSeqInExpr())
+	fmt.Println(namedVoidBinding())
+	fmt.Println(voidLetNoContinuation())
+	callCoercedCallbacks()
 }

@@ -5,7 +5,7 @@ import Data.Bifunctor (first)
 import Data.Map.Strict qualified as Map
 import Data.Semigroup (Max (..))
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes)
 import Text.Megaparsec.Pos (SourcePos)
 
 -- Environment mapping names to their types.
@@ -413,6 +413,8 @@ inferExpr env (EMatch ExprAnn{pos = p} scrut arms) = do
         (MatchArm _ _ body : _) -> applySubst s3 (exprType body)
         [] -> UnitType
   return (EMatch ExprAnn { pos = p, ty = resultTy, isStmt = False } tscrut tarms)
+-- ECoerce is inserted post-inference; it should never appear during inference.
+inferExpr _ (ECoerce ExprAnn{pos = p} _ _) = error $ "inferExpr: unexpected ECoerce at " <> show p
 inferExpr env (EVariadicSpread ExprAnn{pos = p} e) = do
   te <- inferExpr env e
   s1 <- getSubst
@@ -515,6 +517,7 @@ foldMapExpr f expr = f expr <> children
       EVariadicSpread _ e         -> foldMapExpr f e
       EApplication _ fn args      -> foldMapExpr f fn <> foldMap (foldMapExpr f) args
       EMatch _ scrut arms         -> foldMapExpr f scrut <> foldMap (\(MatchArm _ _ body) -> foldMapExpr f body) arms
+      ECoerce _ _ inner           -> foldMapExpr f inner
       _                           -> mempty  -- EVar, EUnitLit, EIntLit, EFloatLit, EStrLit, EMapLit
 
 -- | Map a function over every TypeExpr in an Expr tree.
@@ -541,6 +544,7 @@ mapExprTypes f = go
     go (EVariadicSpread a@ExprAnn{ty = t} e)  = EVariadicSpread a{ty = f t} (go e)
     go (EApplication a@ExprAnn{ty = t} fn args) = EApplication a{ty = f t} (go fn) (map go args)
     go (EMatch a@ExprAnn{ty = t} scrut arms)  = EMatch a{ty = f t} (go scrut) (map goArm arms)
+    go (ECoerce a@ExprAnn{ty = t} c inner)     = ECoerce a{ty = f t} c (go inner)
 
     goArm (MatchArm armPos pat body)  = MatchArm armPos pat (go body)
 
@@ -632,57 +636,108 @@ maxTVarExpr = getMax . foldMapExpr (\e -> Max (maximum (0 : map maxTy (exprTypes
     maxTy (TFunc ps mVar ret) = maximum (0 : map maxTy ps ++ maybe [] (\v -> [maxTy v]) mVar ++ [maxTy ret])
     maxTy (TNamed _) = 0
 
--- Post-order traversal: mark each node's isStmt based on whether it or any
+-- Post-order traversal: go each node's isStmt based on whether it or any
 -- child can standalone as go statement. EApplication and ELet are inherently
 -- statement-valid; all other nodes are statement-valid if any child is.
 computeIsStmt :: Expr -> Expr
-computeIsStmt = mark
+computeIsStmt = go
   where
-    mark (EApplication a f args) =
-      let f' = mark f; args' = map mark args
+    go (EApplication a f args) =
+      let f' = go f; args' = map go args
       in EApplication a{isStmt = True} f' args'
-    mark (ELet a name (Binding ps retTy rhs) mtin) =
-      let rhs' = mark rhs; mtin' = fmap mark mtin
+    go (ELet a name (Binding ps retTy rhs) mtin) =
+      let rhs' = go rhs; mtin' = fmap go mtin
       in ELet a{isStmt = True} name (Binding ps retTy rhs') mtin'
-    mark (EIf a c th el) =
-      let c' = mark c; th' = mark th; el' = mark el
+    go (EIf a c th el) =
+      let c' = go c; th' = go th; el' = go el
           s = isStmt (exprAnn c') || isStmt (exprAnn th') || isStmt (exprAnn el')
       in EIf a{isStmt = s} c' th' el'
-    mark (EMatch a scrut arms) =
-      let scrut' = mark scrut
-          arms' = map markArm arms
+    go (EMatch a scrut arms) =
+      let scrut' = go scrut
+          arms' = map goArm arms
           s = isStmt (exprAnn scrut') || any (\(MatchArm _ _ body) -> isStmt (exprAnn body)) arms'
       in EMatch a{isStmt = s} scrut' arms'
-    mark (ESequence a es) =
-      let es' = map mark es
+    go (ESequence a es) =
+      let es' = map go es
           s = any (isStmt . exprAnn) es'
       in ESequence a{isStmt = s} es'
-    mark (EInfixOp a e1 op e2) =
-      let e1' = mark e1; e2' = mark e2
+    go (EInfixOp a e1 op e2) =
+      let e1' = go e1; e2' = go e2
           s = isStmt (exprAnn e1') || isStmt (exprAnn e2')
       in EInfixOp a{isStmt = s} e1' op e2'
-    mark (ELambda a (Binding ps retTy body)) =
-      let body' = mark body
+    go (ELambda a (Binding ps retTy body)) =
+      let body' = go body
       in ELambda a (Binding ps retTy body')
-    mark (EIndex a e idx) =
-      let e' = mark e; idx' = mark idx
+    go (EIndex a e idx) =
+      let e' = go e; idx' = go idx
           s = isStmt (exprAnn e') || isStmt (exprAnn idx')
       in EIndex a{isStmt = s} e' idx'
-    mark (ESliceLit a es) =
-      let es' = map mark es
+    go (ESliceLit a es) =
+      let es' = map go es
           s = any (isStmt . exprAnn) es'
       in ESliceLit a{isStmt = s} es'
-    mark (EVariadicSpread a e) =
-      let e' = mark e
+    go (EVariadicSpread a e) =
+      let e' = go e
       in EVariadicSpread a{isStmt = isStmt (exprAnn e')} e'
-    mark e@(EVar _ _) = e
-    mark e@(EIntLit _ _) = e
-    mark e@(EFloatLit _ _) = e
-    mark e@(EStrLit _ _) = e
-    mark e@(EUnitLit _) = e
-    mark e@(EMapLit _) = e
+    go e@(EVar _ _) = e
+    go e@(EIntLit _ _) = e
+    go e@(EFloatLit _ _) = e
+    go e@(EStrLit _ _) = e
+    go e@(EUnitLit _) = e
+    go e@(EMapLit _) = e
+    go (ECoerce a c inner) =
+      let inner' = go inner
+      in ECoerce a{isStmt = isStmt (exprAnn inner')} c inner'
 
-    markArm (MatchArm p pat body) = MatchArm p pat (mark body)
+    goArm (MatchArm p pat body) = MatchArm p pat (go body)
+
+-- Post-inference pass: insert ECoerce at type boundaries where function
+-- return types disagree in the unit<->struct{} dimension.
+insertCoercions :: Expr -> Expr
+insertCoercions = go
+  where
+    -- Do two function types differ only in their return type's unit<->struct{} name?
+    funcVoidMismatch (TFunc _ _ (TNamed r1)) (TFunc _ _ (TNamed r2)) =
+      isUnitLike r1 && isUnitLike r2 && r1 /= r2
+    funcVoidMismatch _ _ = False
+
+    coerceIfNeeded expectedTy expr
+      | funcVoidMismatch expectedTy (exprType expr) =
+          ECoerce (exprAnn expr){ty = expectedTy} FuncVoidCoerce expr
+      | otherwise = expr
+
+    -- Type boundaries: coerce where declared types meet expression types.
+    go (ELet a name (Binding params retTy rhs) mtin) =
+      ELet a name (Binding params retTy (coerceIfNeeded retTy (go rhs))) (fmap go mtin)
+    go (ELambda a (Binding params retTy body)) =
+      ELambda a (Binding params retTy (coerceIfNeeded retTy (go body)))
+    go (EApplication a tf targs) =
+      let tf' = go tf
+      in EApplication a tf' (coerceArgs (exprType tf') targs)
+
+    -- Recurse into children.
+    go (EIf a c th el) = EIf a (go c) (go th) (go el)
+    go (EMatch a scrut arms) = EMatch a (go scrut) (map goArm arms)
+    go (ESequence a es) = ESequence a (map go es)
+    go (EInfixOp a e1 op e2) = EInfixOp a (go e1) op (go e2)
+    go (EIndex a e idx) = EIndex a (go e) (go idx)
+    go (ESliceLit a es) = ESliceLit a (map go es)
+    go (EVariadicSpread a e) = EVariadicSpread a (go e)
+    go (ECoerce a c inner) = ECoerce a c (go inner)
+    go e@(EVar {}) = e
+    go e@(EUnitLit {}) = e
+    go e@(EIntLit {}) = e
+    go e@(EFloatLit {}) = e
+    go e@(EStrLit {}) = e
+    go e@(EMapLit {}) = e
+
+    goArm (MatchArm p pat body) = MatchArm p pat (go body)
+
+    -- Coerce fixed args where param types disagree; pass variadic args through.
+    coerceArgs (TFunc fixedTys _ _) args =
+      zipWith (\t a -> coerceIfNeeded t (go a)) fixedTys args
+        ++ map go (drop (length fixedTys) args)
+    coerceArgs _ args = map go args
 
 -- Main entry: runs the full inference pipeline on a parsed Expr tree.
 --
@@ -714,4 +769,7 @@ inferAndResolve expr = do
     errs -> Left errs
 
   -- Step 6: compute statement annotations
-  Right (computeIsStmt afterCollectionDefaults)
+  let afterIsStmt = computeIsStmt afterCollectionDefaults
+
+  -- Step 7: insert unit<->struct{} coercion wrappers
+  Right (insertCoercions afterIsStmt)

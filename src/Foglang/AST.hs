@@ -9,6 +9,7 @@ module Foglang.AST
     ExprAnn (..),
     Param (..),
     Binding (..),
+    Coercion (..),
     Expr (..),
     MatchArm (..),
     Pattern (..),
@@ -110,6 +111,11 @@ data ExprAnn = ExprAnn
   , isStmt :: Bool
   } deriving (Eq, Show)
 
+-- The kind of implicit coercion applied at a type boundary.
+data Coercion
+  = FuncVoidCoerce -- unit<->struct{} mismatch in function return types
+  deriving (Eq, Show)
+
 -- AST for expressions. Every constructor carries an ExprAnn.
 -- The parser fills in placeholder types; inference resolves them.
 data Expr
@@ -129,6 +135,7 @@ data Expr
   | ESequence ExprAnn [Expr]
   | EVariadicSpread ExprAnn Expr -- expr... unpacks []T into a variadic slot at a call site
   | EMatch ExprAnn Expr [MatchArm] -- match expression
+  | ECoerce ExprAnn Coercion Expr -- coerce inner expr to target type (ExprAnn ty)
   deriving (Eq, Show)
 
 -- Extract the ExprAnn from any Expr node.
@@ -149,6 +156,7 @@ exprAnn (EMapLit a) = a
 exprAnn (ESequence a _) = a
 exprAnn (EVariadicSpread a _) = a
 exprAnn (EMatch a _ _) = a
+exprAnn (ECoerce a _ _) = a
 
 -- Extract the SourcePos from any Expr node.
 exprPos :: Expr -> SourcePos
@@ -164,6 +172,7 @@ exprType = ty . exprAnn
 exprTypes :: Expr -> [TypeExpr]
 exprTypes (ELambda ExprAnn{ty = t} (Binding params retTy _)) = t : retTy : map paramType params
 exprTypes (ELet ExprAnn{ty = t} _ (Binding params retTy _) _) = t : retTy : map paramType params
+exprTypes (ECoerce ExprAnn{ty = t} _ inner) = t : [exprType inner]
 exprTypes expr = [exprType expr]
 
 data MatchArm = MatchArm SourcePos Pattern Expr

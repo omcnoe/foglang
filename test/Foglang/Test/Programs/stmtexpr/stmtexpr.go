@@ -33,8 +33,9 @@ func condAdd(x int, y int) int {
 	return (x + func() int {
 		if y > 0 {
 			return y
+		} else {
+			return (0 - y)
 		}
-		return (0 - y)
 	}())
 }
 func opsAsStmts() {
@@ -80,10 +81,15 @@ var exprVar int = (3 + 4)
 var condVar int = func() int {
 	if true {
 		return 1
+	} else {
+		return 0
 	}
-	return 0
 }()
-var letVar int = func() int { x := 10; _ = x; return (x + 5) }()
+var letVar int = func() int {
+	x := 10
+	_ = x
+	return (x + 5)
+}()
 var computed int = func() int {
 	fmt.Println("computing global")
 	return 42
@@ -93,8 +99,9 @@ func ifInLet(x int) int {
 	sign := func() int {
 		if x < 0 {
 			return (0 - 1)
+		} else {
+			return 1
 		}
-		return 1
 	}()
 	_ = sign
 	return (x * sign)

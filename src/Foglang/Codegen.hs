@@ -1,7 +1,7 @@
-module Foglang.Codegen (codegenGoFile) where
+module Foglang.Codegen (genGoFile) where
 
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
 import Foglang.Inference (inferAndResolve)
 import System.Process (readProcess)
 
@@ -11,10 +11,6 @@ ind n = T.replicate n "\t"
 -- Suppress Go's "declared and not used" error for a local variable.
 useVar :: Int -> T.Text -> T.Text
 useVar indent name = ind indent <> "_ = " <> name <> "\n"
-
--- Inline variant for use inside IIFEs (semicolon-separated).
-useVarInline :: T.Text -> T.Text
-useVarInline name = "_ = " <> name <> "; "
 
 -- Single-line counterpart to genLocalFunc: wraps a pre-rendered expression
 -- as an inline Go func literal. Used for partial application wrappers and
@@ -37,8 +33,8 @@ genLocalFunc indent params retTy trhs =
     <> "}"
   where
     bodyText = case retTy of
-      UnitType -> genStmtBody
-      _ -> genRetBody
+      UnitType -> genBody Void
+      _ -> genBody Returning
 
 identText :: Ident -> T.Text
 identText (Ident t) = t
@@ -134,7 +130,7 @@ genIfChain mode indent cond then' else' =
     <> genElsePart mode indent else'
     <> "\n"
 
-data BodyMode = ReturnLast | StmtOnly
+data BodyMode = Returning | Void
 
 -- Generate a match expression as a statement-level if/else chain.
 genMatchBody :: BodyMode -> Int -> Expr -> [MatchArm] -> T.Text
@@ -179,18 +175,9 @@ genMatchBody mode indent tscrut arms =
       lastArmIsCatchAll = case last arms of
         MatchArm _ pat _ -> isIrrefutablePattern pat
       defaultReturn = case mode of
-        ReturnLast | not lastArmIsCatchAll -> ind indent <> "panic(\"match not exhaustive\")\n"
+        Returning | not lastArmIsCatchAll -> ind indent <> "panic(\"match not exhaustive\")\n"
         _ -> ""
    in scrutDecl <> T.concat armTexts <> ind indent <> "}\n" <> defaultReturn
-
--- Generate a match expression as an inline IIFE.
-genMatchExpr :: TypeExpr -> Expr -> [MatchArm] -> T.Text
-genMatchExpr t tscrut tarms =
-  "func() "
-    <> typeExprGoText t
-    <> " {\n"
-    <> genMatchBody ReturnLast 1 tscrut tarms
-    <> "}()"
 
 -- Combine Go conditions with &&, filtering out trivial "true" entries.
 combineConds :: [T.Text] -> T.Text
@@ -231,56 +218,36 @@ genCont :: BodyMode -> Int -> Maybe Expr -> T.Text
 genCont _ _ Nothing = ""
 genCont mode indent (Just tin) = genBody mode indent tin
 
--- Unified body generator. ReturnLast emits 'return expr' for the final expression;
--- StmtOnly emits it as a plain statement.
+-- Generate a function body. Returning: last expression gets 'return'.
+-- Void: all expressions emitted as statements.
 genBody :: BodyMode -> Int -> Expr -> T.Text
-genBody StmtOnly _ (EUnitLit _) = ""
+genBody Void _ (EUnitLit _) = ""
 genBody mode indent (EIf _ cond then' else') = genIfChain mode indent cond then' else'
 genBody mode indent (EMatch _ tscrut tarms) = genMatchBody mode indent tscrut tarms
-genBody StmtOnly indent (ESequence _ texprs) = T.concat (map (genBody StmtOnly indent) texprs)
-genBody ReturnLast indent (ESequence _ texprs)
-  | null texprs = error "genBody ReturnLast: empty ESequence (should be unreachable)"
+genBody Void indent (ESequence _ texprs) = T.concat (map (genBody Void indent) texprs)
+genBody Returning indent (ESequence _ texprs)
+  | null texprs = error "genBody Returning: empty ESequence (should be unreachable)"
   | otherwise =
-      T.concat (map (genBody StmtOnly indent) (init texprs))
-        <> genBody ReturnLast indent (last texprs)
-genBody mode indent (ELet _ name (Binding [] retTy trhs) mtin)
-  -- Unit-typed RHS with side effects: emit RHS as statement, then synthesize binding
-  | (retTy == UnitType || exprType trhs == UnitType),
-    isStmt (exprAnn trhs),
-    name == Ident "_" =
-      ind indent
-        <> genExpr trhs
-        <> "\n"
-        <> genCont mode indent mtin
-  | (retTy == UnitType || exprType trhs == UnitType),
-    isStmt (exprAnn trhs) =
-      ind indent
-        <> genExpr trhs
-        <> "\n"
-        <> ind indent
-        <> identText name
-        <> " := struct{}{}\n"
-        <> useVar indent (identText name)
-        <> genCont mode indent mtin
-  -- Unit-typed RHS without side effects (e.g. () literal, unit variable):
-  -- skip the RHS statement, just synthesize the binding
-  | retTy == UnitType || exprType trhs == UnitType,
-    name == Ident "_" =
-      genCont mode indent mtin
+      T.concat (map (genBody Void indent) (init texprs))
+        <> genBody Returning indent (last texprs)
+-- Void binding: RHS is void (can't bind in Go), or declared type is unit
+genBody mode indent (ELet _ (Ident "_") (Binding [] retTy trhs) mtin)
   | retTy == UnitType || exprType trhs == UnitType =
-      ind indent
-        <> identText name
-        <> " := struct{}{}\n"
+      -- bound to "_", ignore for cleaner output
+      genBody Void indent trhs
+        <> genCont mode indent mtin
+genBody mode indent (ELet _ name (Binding [] retTy trhs) mtin)
+  | retTy == UnitType || exprType trhs == UnitType =
+      -- bound to name, synthesize struct{} value
+      genBody Void indent trhs
+        <> ind indent <> identText name <> " := struct{}{}\n"
         <> useVar indent (identText name)
         <> genCont mode indent mtin
-  | otherwise =
-      ind indent
-        <> identText name
-        <> " := "
-        <> genExpr trhs
-        <> "\n"
-        <> useVar indent (identText name)
-        <> genCont mode indent mtin
+-- Normal value binding.
+genBody mode indent (ELet _ name (Binding [] _ trhs) mtin) =
+  ind indent <> identText name <> " := " <> genExpr trhs <> "\n"
+    <> useVar indent (identText name)
+    <> genCont mode indent mtin
 genBody mode indent (ELet _ name (Binding params retTy trhs) mtin) =
   -- Use var declaration + assignment for local functions to support recursion.
   -- Go closures can't reference themselves with :=, but can with var + =.
@@ -299,32 +266,23 @@ genBody mode indent (ELet _ name (Binding params retTy trhs) mtin) =
         <> "\n"
         <> useVar indent (identText name)
         <> genCont mode indent mtin
-genBody StmtOnly indent te
+genBody Void indent te
   | isStmt (exprAnn te) = ind indent <> genExpr te <> "\n"
   | otherwise = ind indent <> "_ = " <> genExpr te <> "\n"
-genBody ReturnLast indent te = ind indent <> "return " <> genExpr te <> "\n"
+genBody Returning indent te = ind indent <> "return " <> genExpr te <> "\n"
 
-genRetBody :: Int -> Expr -> T.Text
-genRetBody = genBody ReturnLast
-
-genStmtBody :: Int -> Expr -> T.Text
-genStmtBody = genBody StmtOnly
-
-genFunc :: Ident -> [Param] -> TypeExpr -> Expr -> T.Text
-genFunc name params retTy tbody =
-  "func "
-    <> identText name
-    <> "("
-    <> paramListGoText params
-    <> ")"
-    <> retTypeGoText retTy
-    <> " {\n"
-    <> bodyText 1 tbody
-    <> "}\n"
-  where
-    bodyText = case retTy of
-      UnitType -> genStmtBody
-      _ -> genRetBody
+-- Wrap a compound expression in an immediately-invoked function expression.
+-- Three cases:
+--   void + side effects → func() struct{} { <Void body>; return struct{}{} }()
+--   void + pure         → struct{}{}
+--   non-void            → func() T { <Returning body> }()
+genExprIIFE :: Expr -> T.Text
+genExprIIFE e = case exprAnn e of
+  ExprAnn{ty = UnitType, isStmt = True} ->
+    "func() struct{} {\n" <> genBody Void 1 e <> "\treturn struct{}{}\n}()"
+  ExprAnn{ty = UnitType} -> "struct{}{}"
+  ExprAnn{ty = t} ->
+    "func() " <> typeExprGoText t <> " {\n" <> genBody Returning 1 e <> "}()"
 
 -- Generate a Go expression from an Expr.
 -- For Application nodes, the function's Expr carries its type, enabling
@@ -375,237 +333,88 @@ genExpr (EApplication _ tf targs) =
                        in map genExpr (take nFixed targs) ++ map genExpr varArgs
                in genExpr tf <> "(" <> T.intercalate ", " args <> ")"
     _ -> genExpr tf <> "(" <> T.intercalate ", " (map genExpr targs) <> ")"
-genExpr (EIf a@ExprAnn{ty = t} cond then' else')
-  | t == UnitType, isStmt a =
-      "func() { if " <> genExpr cond <> " { " <> genExpr then' <> " }; " <> genExpr else' <> " }()"
-  | t == UnitType =
-      "struct{}{}"
-  | otherwise =
-      "func() " <> typeExprGoText t <> " { if " <> genExpr cond <> " { return " <> genExpr then' <> " }; return " <> genExpr else' <> " }()"
-genExpr (ESequence _ []) = "struct{}{}"
-genExpr (ESequence a@ExprAnn{ty = t} texprs)
-  | t == UnitType, isStmt a =
-      "func() { "
-        <> T.intercalate "; " (map genExpr texprs)
-        <> " }()"
-  | t == UnitType =
-      "struct{}{}"
-  | otherwise =
-      "func() "
-        <> typeExprGoText t
-        <> " { "
-        <> T.intercalate "; " (map genExpr (init texprs))
-        <> "; return "
-        <> genExpr (last texprs)
-        <> " }()"
-genExpr (ELet ExprAnn{ty = t} name (Binding [] _ trhs) (Just tin))
-  -- Unit-typed RHS with side effects: emit as statement, synthesize binding
-  | exprType trhs == UnitType,
-    isStmt (exprAnn trhs),
-    name == Ident "_" =
-      "func() "
-        <> retTyText
-        <> "{ "
-        <> genExpr trhs
-        <> "; "
-        <> returnKw
-        <> genExpr tin
-        <> " }()"
-  | exprType trhs == UnitType,
-    isStmt (exprAnn trhs) =
-      "func() "
-        <> retTyText
-        <> "{ "
-        <> genExpr trhs
-        <> "; "
-        <> identText name
-        <> " := struct{}{}; "
-        <> useVarInline (identText name)
-        <> returnKw
-        <> genExpr tin
-        <> " }()"
-  -- Unit-typed RHS without side effects: skip RHS, just synthesize
-  | exprType trhs == UnitType,
-    name == Ident "_" =
-      "func() "
-        <> retTyText
-        <> "{ "
-        <> returnKw
-        <> genExpr tin
-        <> " }()"
-  | exprType trhs == UnitType =
-      "func() "
-        <> retTyText
-        <> "{ "
-        <> identText name
-        <> " := struct{}{}; "
-        <> useVarInline (identText name)
-        <> returnKw
-        <> genExpr tin
-        <> " }()"
-  | otherwise =
-      "func() "
-        <> retTyText
-        <> "{ "
-        <> identText name
-        <> " := "
-        <> genExpr trhs
-        <> "; "
-        <> useVarInline (identText name)
-        <> returnKw
-        <> genExpr tin
-        <> " }()"
-  where
-    retTyText = case t of
-      UnitType -> ""
-      _ -> typeExprGoText t <> " "
-    returnKw = case t of
-      UnitType -> ""
-      _ -> "return "
-genExpr (ELet ExprAnn{ty = t} name (Binding params retTy trhs) (Just tin)) =
-  -- Use var declaration + assignment for local functions to support recursion,
-  -- matching the statement-level codegen in genBody.
-  let paramsText = paramListGoText params
-      funcTy = "func(" <> paramsText <> ")" <> retTypeGoText retTy
-   in "func() "
-        <> outerRetTyText
-        <> "{ var "
-        <> identText name
-        <> " "
-        <> funcTy
-        <> "; "
-        <> identText name
-        <> " = "
-        <> genLocalFunc 0 paramsText retTy trhs
-        <> "; "
-        <> useVarInline (identText name)
-        <> outerReturnKw
-        <> genExpr tin
-        <> " }()"
-  where
-    outerRetTyText = case t of
-      UnitType -> ""
-      _ -> typeExprGoText t <> " "
-    outerReturnKw = case t of
-      UnitType -> ""
-      _ -> "return "
-genExpr (ELet _ name (Binding [] _ trhs) Nothing)
-  | name == Ident "_" =
-      "func() { " <> genExpr trhs <> " }()"
-  | otherwise =
-      "func() { "
-        <> identText name
-        <> " := "
-        <> genExpr trhs
-        <> "; "
-        <> useVarInline (identText name)
-        <> "}()"
-genExpr (ELet _ name (Binding params retTy trhs) Nothing) =
-  let paramsText = paramListGoText params
-      funcTy = "func(" <> paramsText <> ")" <> retTypeGoText retTy
-   in "func() { var "
-        <> identText name
-        <> " "
-        <> funcTy
-        <> "; "
-        <> identText name
-        <> " = "
-        <> genLocalFunc 0 paramsText retTy trhs
-        <> "; "
-        <> useVarInline (identText name)
-        <> "}()"
+genExpr e@(EIf {}) = genExprIIFE e
+genExpr (ESequence _ []) = error "genExpr: empty ESequence should not reach expression context"
+genExpr e@(ESequence {}) = genExprIIFE e
+genExpr e@(ELet _ _ _ (Just _)) = genExprIIFE e
+genExpr (ELet _ _ _ Nothing) = error "genExpr: ELet without continuation should be in statement context"
 genExpr (ESliceLit ExprAnn{ty = TSlice (TNamed (Ident "opaque"))} []) = "nil"
 genExpr (ESliceLit ExprAnn{ty = t} []) = typeExprGoText t <> "{}"
 genExpr (ESliceLit ExprAnn{ty = t} texprs) = typeExprGoText t <> "{" <> T.intercalate ", " (map genExpr texprs) <> "}"
 genExpr (EMapLit ExprAnn{ty = TMap (TNamed (Ident "opaque")) (TNamed (Ident "opaque"))}) = "nil"
 genExpr (EMapLit ExprAnn{ty = t}) = typeExprGoText t <> "{}"
-genExpr (EMatch ExprAnn{ty = t} tscrut tarms) = genMatchExpr t tscrut tarms
+genExpr e@(EMatch {}) = genExprIIFE e
 genExpr (ELambda _ (Binding params retTy tbody@(ESequence {}))) =
   genLocalFunc 0 (paramListGoText params) retTy tbody
 genExpr (ELambda _ (Binding params retTy tbody)) =
   genInlineFunc (paramListGoText params) retTy (genExpr tbody)
-
-codegenImport :: ImportDecl -> T.Text
-codegenImport (ImportDecl Default path) = "import \"" <> path <> "\"\n"
-codegenImport (ImportDecl Dot path) = "import . \"" <> path <> "\"\n"
-codegenImport (ImportDecl Blank path) = "import _ \"" <> path <> "\"\n"
-codegenImport (ImportDecl (Alias i) path) = "import " <> identText i <> " \"" <> path <> "\"\n"
-
-codegenHeader :: Header -> T.Text
-codegenHeader (Header (PackageClause pkg) []) = "package " <> identText pkg <> "\n"
-codegenHeader (Header (PackageClause pkg) imports) =
-  "package "
-    <> identText pkg
-    <> "\n"
-    <> T.concat (map codegenImport imports)
-
-codegenDecl :: Ident -> [Param] -> TypeExpr -> Expr -> T.Text
-codegenDecl name [] valTy tbody@(ESequence {}) =
-  "var "
-    <> identText name
-    <> " "
-    <> typeExprGoText valTy
-    <> " = func() "
-    <> typeExprGoText valTy
-    <> " {\n"
-    <> genRetBody 1 tbody
-    <> "}()\n"
-codegenDecl name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> coerceValue valTy tbody <> "\n"
-codegenDecl name params retTy tbody = genFunc name params retTy tbody
-
--- Wrap a function value when its declared return type differs from its actual
--- return type in the unit<->struct{} dimension (void unit coercion).
--- Handles any TFunc with matching param lists.
-coerceValue :: TypeExpr -> Expr -> T.Text
-coerceValue declTy tbody =
-  case (declTy, exprType tbody) of
+-- Function-type coercion wrapper: generates a wrapper lambda that forwards
+-- args and adjusts the return type in the unit<->struct{} dimension.
+genExpr (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
+  case (targetTy, exprType inner) of
+    -- () return -> struct{} return
     ( TFunc fixedTys mVarTy (TNamed (Ident "struct{}")),
-      TFunc fixedTys' mVarTy' (UnitType)
+      TFunc fixedTys' mVarTy' UnitType
       )
         | fixedTys == fixedTys',
           mVarTy == mVarTy' ->
             let (closureParams, argNames) = closureParamsAndCallArgs fixedTys mVarTy
                 callArgs = T.intercalate ", " argNames
-             in "func(" <> closureParams <> ") struct{} { " <> genExpr tbody <> "(" <> callArgs <> "); return struct{}{} }"
-    ( TFunc fixedTys mVarTy (UnitType),
+             in "func(" <> closureParams <> ") struct{} { " <> genExpr inner <> "(" <> callArgs <> "); return struct{}{} }"
+    -- struct{} return -> () return
+    ( TFunc fixedTys mVarTy UnitType,
       TFunc fixedTys' mVarTy' (TNamed (Ident "struct{}"))
       )
         | fixedTys == fixedTys',
           mVarTy == mVarTy' ->
             let (closureParams, argNames) = closureParamsAndCallArgs fixedTys mVarTy
                 callArgs = T.intercalate ", " argNames
-             in "func(" <> closureParams <> ") { " <> genExpr tbody <> "(" <> callArgs <> ") }"
-    _ -> genExpr tbody
+             in "func(" <> closureParams <> ") { " <> genExpr inner <> "(" <> callArgs <> ") }"
+    _ -> error $ "genExpr ECoerce FuncVoidCoerce: unhandled types " <> show (exprType inner) <> " -> " <> show targetTy
 
-codegenTopLevel :: Expr -> T.Text
-codegenTopLevel (ELet _ n (Binding p t trhs) mtin) = codegenDecl n p t trhs <> maybe "" codegenTopLevel mtin
-codegenTopLevel (ESequence _ texprs) = T.concat (map codegenTopLevel texprs)
-codegenTopLevel e@(EApplication {}) = "func init() {\n" <> genStmtBody 1 e <> "}\n"
-codegenTopLevel e@(EIf {}) = "func init() {\n" <> genStmtBody 1 e <> "}\n"
-codegenTopLevel e@(EMatch {}) = "func init() {\n" <> genStmtBody 1 e <> "}\n"
--- TODO: update this function to use new isStmt logic instead of additional identical hardcoded pattern matching
--- EInfixOp may contain callable sub-expressions (e.g. f() + g()), so we must
--- wrap in init() even though the infix op itself is pure. If new expression
--- types are added that can contain callable sub-expressions, they will also
--- need init() wrapping here.
-codegenTopLevel e@(EInfixOp {}) = "func init() {\n" <> genStmtBody 1 e <> "}\n"
--- TODO: replace errors with warnings when warnings support is added.
-codegenTopLevel e@(EVar {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EIntLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EFloatLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EStrLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EUnitLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(ELambda {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EIndex {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(ESliceLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EMapLit {}) = error $ "unsupported top-level expression: " <> show e
-codegenTopLevel e@(EVariadicSpread {}) = error $ "unsupported top-level expression: " <> show e
+genImport :: ImportDecl -> T.Text
+genImport (ImportDecl Default path) = "import \"" <> path <> "\"\n"
+genImport (ImportDecl Dot path) = "import . \"" <> path <> "\"\n"
+genImport (ImportDecl Blank path) = "import _ \"" <> path <> "\"\n"
+genImport (ImportDecl (Alias i) path) = "import " <> identText i <> " \"" <> path <> "\"\n"
 
-codegenGoFile :: FogFile -> IO T.Text
-codegenGoFile (FogFile hdr body) = do
+genHeader :: Header -> T.Text
+genHeader (Header (PackageClause pkg) []) = "package " <> identText pkg <> "\n"
+genHeader (Header (PackageClause pkg) imports) =
+  "package "
+    <> identText pkg
+    <> "\n"
+    <> T.concat (map genImport imports)
+
+genDecl :: Ident -> [Param] -> TypeExpr -> Expr -> T.Text
+genDecl name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> genExpr tbody <> "\n"
+genDecl name params retTy tbody =
+  "func "
+    <> identText name
+    <> "("
+    <> paramListGoText params
+    <> ")"
+    <> retTypeGoText retTy
+    <> " {\n"
+    <> bodyText 1 tbody
+    <> "}\n"
+  where
+    bodyText = case retTy of
+      UnitType -> genBody Void
+      _ -> genBody Returning
+
+genPackageLevel :: Expr -> T.Text
+genPackageLevel (ELet _ n (Binding p t trhs) mtin) = genDecl n p t trhs <> maybe "" genPackageLevel mtin
+genPackageLevel (ESequence _ texprs) = T.concat (map genPackageLevel texprs)
+genPackageLevel e
+  | isStmt (exprAnn e) = "func init() {\n" <> genBody Void 1 e <> "}\n"
+  | otherwise = error $ "unsupported top-level expression: " <> show e
+
+genGoFile :: FogFile -> IO T.Text
+genGoFile (FogFile hdr body) = do
   let tbody = case inferAndResolve body of
         Right te -> te
         Left errs -> error $ "inference errors: " <> show errs
-      raw = codegenHeader hdr <> codegenTopLevel tbody
+      raw = genHeader hdr <> genPackageLevel tbody
   formatted <- readProcess "gofmt" [] (T.unpack raw)
   return $ T.pack formatted
