@@ -115,9 +115,9 @@ func primes(count int) []int {
 				} else if _scrut4_1 {
 					factors := _scrut4_0
 					_ = factors
-					table := foldFactors(func(m map[int][]int, p int) map[int][]int { return addFactor(m, nextOddMultiple(x, p), p) }, mapDelete(table, x), factors)
-					_ = table
-					return sieve(n, rest, table)
+					table_shadow1 := foldFactors(func(m map[int][]int, p int) map[int][]int { return addFactor(m, nextOddMultiple(x, p), p) }, mapDelete(table, x), factors)
+					_ = table_shadow1
+					return sieve(n, rest, table_shadow1)
 				}
 				panic("match not exhaustive")
 			}

@@ -122,6 +122,67 @@ func stmtsThenIf(x int) int {
 		return (0 - x)
 	}
 }
+func shadowLocal() int {
+	x := 5
+	_ = x
+	x_shadow1 := (x + 10)
+	_ = x_shadow1
+	return x_shadow1
+}
+
+var shadowTop int = 1
+var shadowTop_shadow1 int = (shadowTop + 100)
+
+func countdown(n int) int {
+	if n == 0 {
+		return 0
+	} else {
+		return countdown((n - 1))
+	}
+}
+func countdown_shadow1(n int) int {
+	if n == 0 {
+		return 100
+	} else {
+		return countdown_shadow1((n - 1))
+	}
+}
+func localRecShadow() int {
+	var f func(n int) int
+	f = func(n int) int {
+		if n == 0 {
+			return 0
+		} else {
+			return f((n - 1))
+		}
+	}
+	_ = f
+	first := f(5)
+	_ = first
+	var f_shadow1 func(n int) int
+	f_shadow1 = func(n int) int {
+		if n == 0 {
+			return 100
+		} else {
+			return f_shadow1((n - 1))
+		}
+	}
+	_ = f_shadow1
+	return (first + f_shadow1(3))
+}
+func doubleMangle() int {
+	x := 1
+	_ = x
+	x_shadow1 := 2
+	_ = x_shadow1
+	x_shadow1_shadow1 := 3
+	_ = x_shadow1_shadow1
+	x_shadow1_shadow2 := 4
+	_ = x_shadow1_shadow2
+	x_shadow2 := 5
+	_ = x_shadow2
+	return (x_shadow2 + x_shadow1_shadow2)
+}
 func main() {
 	fmt.Println(abs(5))
 	fmt.Println(abs((0 - 3)))
@@ -150,4 +211,9 @@ func main() {
 	fmt.Println(constVal())
 	fmt.Println(stmtsThenIf(5))
 	fmt.Println(stmtsThenIf((0 - 3)))
+	fmt.Println(shadowLocal())
+	fmt.Println(shadowTop_shadow1)
+	fmt.Println(countdown_shadow1(5))
+	fmt.Println(localRecShadow())
+	fmt.Println(doubleMangle())
 }

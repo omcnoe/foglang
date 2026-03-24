@@ -1,9 +1,58 @@
 module Foglang.Codegen (genGoFile) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
 import Foglang.Inference (inferAndResolve)
 import System.Process (readProcess)
+
+-- Scope tracks how many times each name has been bound, enabling shadowing
+-- via renaming. First binding emits "x", second emits "x_1", etc.
+type Scope = Map.Map Ident Int
+
+emptyScope :: Scope
+emptyScope = Map.empty
+
+-- Bind a name in scope. Returns the Go-level name and updated scope.
+-- Shadows produce _shadowN suffixes. Fog identifiers ending with _shadow\d+
+-- get "double-mangled" (start at _shadow1 instead of bare) to avoid collisions
+-- — e.g. fog `x_shadow1` emits `x_shadow1_shadow1`, so it never collides
+-- with a shadow of fog `x` which emits `x_shadow1`.
+bindName :: Scope -> Ident -> (T.Text, Scope)
+bindName scope ident@(Ident name) =
+  case Map.lookup ident scope of
+    Nothing
+      | endsWithShadowDigits name ->
+          (name <> "_shadow1", Map.insert ident 1 scope)
+      | otherwise ->
+          (name, Map.insert ident 0 scope)
+    Just n ->
+      (name <> "_shadow" <> T.pack (show (n + 1)), Map.insert ident (n + 1) scope)
+
+-- Does a name end with _shadow\d+ (could collide with shadow suffixes)?
+endsWithShadowDigits :: T.Text -> Bool
+endsWithShadowDigits name =
+  case T.breakOnEnd "_shadow" name of
+    ("", _) -> False
+    (_, digits) -> not (T.null digits) && T.all (\c -> c >= '0' && c <= '9') digits
+
+-- Bind function parameters into scope (params don't get renamed — they're
+-- always fresh in their Go scope — but we register them so that references
+-- inside the body resolve correctly).
+bindParams :: Scope -> [Param] -> Scope
+bindParams scope [] = scope
+bindParams scope [PUnit] = scope
+bindParams scope (PTyped name _ : rest) = bindParams (snd (bindName scope name)) rest
+bindParams scope (PVariadic name _ : rest) = bindParams (snd (bindName scope name)) rest
+bindParams scope (PUnit : rest) = bindParams scope rest
+
+-- Resolve a name to its current Go-level name.
+resolveName :: Scope -> Ident -> T.Text
+resolveName scope ident@(Ident name) =
+  case Map.lookup ident scope of
+    Nothing -> name  -- not yet bound (e.g. top-level Go import like fmt.Println)
+    Just 0  -> name  -- first binding, no suffix
+    Just n  -> name <> "_shadow" <> T.pack (show n)
 
 ind :: Int -> T.Text
 ind n = T.replicate n "\t"
@@ -21,8 +70,8 @@ genInlineFunc params retTy body = "func(" <> params <> ") " <> typeExprGoText re
 
 -- Render a let-bound local function as a multi-line func literal,
 -- using the appropriate statement/body generator for the function body.
-genLocalFunc :: Int -> T.Text -> TypeExpr -> Expr -> T.Text
-genLocalFunc indent params retTy trhs =
+genLocalFunc :: Scope -> Int -> T.Text -> TypeExpr -> Expr -> T.Text
+genLocalFunc scope indent params retTy trhs =
   "func("
     <> params
     <> ")"
@@ -33,8 +82,8 @@ genLocalFunc indent params retTy trhs =
     <> "}"
   where
     bodyText = case retTy of
-      UnitType -> genBody Void
-      _ -> genBody Returning
+      UnitType -> genBody scope Void
+      _ -> genBody scope Returning
 
 identText :: Ident -> T.Text
 identText (Ident t) = t
@@ -103,44 +152,39 @@ closureParamsAndCallArgs fixedTys mVarTy = (paramListGoText params, callArgNames
     argName (PVariadic name _) = identText name <> "..."
     argName PUnit = error "closureParamsAndCallArgs: unexpected PUnit"
 
-genElsePart :: BodyMode -> Int -> Expr -> T.Text
-genElsePart mode indent (EIf _ cond then' else') =
+genElsePart :: Scope -> BodyMode -> Int -> Expr -> T.Text
+genElsePart scope mode indent (EIf _ cond then' else') =
   " else if "
-    <> genExpr cond
+    <> genExpr scope cond
     <> " {\n"
-    <> genBody mode (indent + 1) then'
+    <> genBody scope mode (indent + 1) then'
     <> ind indent
     <> "}"
-    <> genElsePart mode indent else'
-genElsePart mode indent e =
+    <> genElsePart scope mode indent else'
+genElsePart scope mode indent e =
   " else {\n"
-    <> genBody mode (indent + 1) e
+    <> genBody scope mode (indent + 1) e
     <> ind indent
     <> "}"
 
-genIfChain :: BodyMode -> Int -> Expr -> Expr -> Expr -> T.Text
-genIfChain mode indent cond then' else' =
+genIfChain :: Scope -> BodyMode -> Int -> Expr -> Expr -> Expr -> T.Text
+genIfChain scope mode indent cond then' else' =
   ind indent
     <> "if "
-    <> genExpr cond
+    <> genExpr scope cond
     <> " {\n"
-    <> genBody mode (indent + 1) then'
+    <> genBody scope mode (indent + 1) then'
     <> ind indent
     <> "}"
-    <> genElsePart mode indent else'
+    <> genElsePart scope mode indent else'
     <> "\n"
 
 data BodyMode = Returning | Void
 
 -- Generate a match expression as a statement-level if/else chain.
-genMatchBody :: BodyMode -> Int -> Expr -> [MatchArm] -> T.Text
-genMatchBody _ _ _ [] = ""
-genMatchBody mode indent tscrut arms =
-  -- Detect tuple match by scanning ALL arms for any tuple pattern.
-  -- Go multi-return (e.g. map comma-ok) must be immediately destructured,
-  -- so we also alias scrutVar := scrutVar_0 for non-tuple arms to reference
-  -- (only when there are non-tuple arms, to avoid unused variable errors in Go).
-  -- Scan arms once: detect tuple arity and whether non-tuple arms exist.
+genMatchBody :: Scope -> BodyMode -> Int -> Expr -> [MatchArm] -> T.Text
+genMatchBody _ _ _ _ [] = ""
+genMatchBody scope mode indent tscrut arms =
   let (tupleArity, hasNonTupleArm) =
         foldr
           ( \(MatchArm _ p _) (arity, hasNon) -> case p of
@@ -160,8 +204,8 @@ genMatchBody mode indent tscrut arms =
                   if hasNonTupleArm
                     then ind indent <> scrutVar <> " := " <> scrutVar <> "_0\n" <> useVar indent scrutVar
                     else ""
-             in ind indent <> vars <> " := " <> genExpr tscrut <> "\n" <> useVars <> alias
-        | otherwise = ind indent <> scrutVar <> " := " <> genExpr tscrut <> "\n" <> useVar indent scrutVar
+             in ind indent <> vars <> " := " <> genExpr scope tscrut <> "\n" <> useVars <> alias
+        | otherwise = ind indent <> scrutVar <> " := " <> genExpr scope tscrut <> "\n" <> useVar indent scrutVar
       genArm isFirst isLast (MatchArm _ pat tbody) =
         let (cond, bindings) = genPatternCond scrutVar pat
             keyword'
@@ -169,7 +213,7 @@ genMatchBody mode indent tscrut arms =
               | isLast && isIrrefutablePattern pat = "} else "
               | otherwise = "} else if " <> cond <> " "
             bindingText = T.concat [ind (indent + 1) <> n <> " := " <> v <> "\n" <> useVar (indent + 1) n | (n, v) <- bindings]
-         in ind indent <> keyword' <> "{\n" <> bindingText <> genBody mode (indent + 1) tbody
+         in ind indent <> keyword' <> "{\n" <> bindingText <> genBody scope mode (indent + 1) tbody
       lastFlags = replicate (length arms - 1) False ++ [True]
       armTexts = zipWith3 genArm (True : repeat False) lastFlags arms
       lastArmIsCatchAll = case last arms of
@@ -214,79 +258,80 @@ genPatternCond scrut (PtTuple pats) =
 
 -- Generate the continuation of a let binding (the in-expression).
 -- Nothing means the let is the last thing in the block.
-genCont :: BodyMode -> Int -> Maybe Expr -> T.Text
-genCont _ _ Nothing = ""
-genCont mode indent (Just tin) = genBody mode indent tin
+genCont :: Scope -> BodyMode -> Int -> Maybe Expr -> T.Text
+genCont _ _ _ Nothing = ""
+genCont scope mode indent (Just tin) = genBody scope mode indent tin
 
 -- Generate a function body. Returning: last expression gets 'return'.
 -- Void: all expressions emitted as statements.
-genBody :: BodyMode -> Int -> Expr -> T.Text
-genBody Void _ (EUnitLit _) = ""
-genBody mode indent (EIf _ cond then' else') = genIfChain mode indent cond then' else'
-genBody mode indent (EMatch _ tscrut tarms) = genMatchBody mode indent tscrut tarms
-genBody Void indent (ESequence _ texprs) = T.concat (map (genBody Void indent) texprs)
-genBody Returning indent (ESequence _ texprs)
+genBody :: Scope -> BodyMode -> Int -> Expr -> T.Text
+genBody _ Void _ (EUnitLit _) = ""
+genBody scope mode indent (EIf _ cond then' else') = genIfChain scope mode indent cond then' else'
+genBody scope mode indent (EMatch _ tscrut tarms) = genMatchBody scope mode indent tscrut tarms
+genBody scope Void indent (ESequence _ texprs) = T.concat (map (genBody scope Void indent) texprs)
+genBody scope Returning indent (ESequence _ texprs)
   | null texprs = error "genBody Returning: empty ESequence (should be unreachable)"
   | otherwise =
-      T.concat (map (genBody Void indent) (init texprs))
-        <> genBody Returning indent (last texprs)
+      T.concat (map (genBody scope Void indent) (init texprs))
+        <> genBody scope Returning indent (last texprs)
 -- Void binding: RHS is void (can't bind in Go), or declared type is unit
-genBody mode indent (ELet _ (Ident "_") (Binding [] retTy trhs) mtin)
+genBody scope mode indent (ELet _ (Ident "_") (Binding [] retTy trhs) mtin)
   | retTy == UnitType || exprType trhs == UnitType =
-      -- bound to "_", ignore for cleaner output
-      genBody Void indent trhs
-        <> genCont mode indent mtin
-genBody mode indent (ELet _ name (Binding [] retTy trhs) mtin)
+      genBody scope Void indent trhs
+        <> genCont scope mode indent mtin
+genBody scope mode indent (ELet _ name (Binding [] retTy trhs) mtin)
   | retTy == UnitType || exprType trhs == UnitType =
-      -- bound to name, synthesize struct{} value
-      genBody Void indent trhs
-        <> ind indent <> identText name <> " := struct{}{}\n"
-        <> useVar indent (identText name)
-        <> genCont mode indent mtin
+      let (goName, scope') = bindName scope name
+      in genBody scope Void indent trhs
+        <> ind indent <> goName <> " := struct{}{}\n"
+        <> useVar indent goName
+        <> genCont scope' mode indent mtin
 -- Normal value binding.
-genBody mode indent (ELet _ name (Binding [] _ trhs) mtin) =
-  ind indent <> identText name <> " := " <> genExpr trhs <> "\n"
-    <> useVar indent (identText name)
-    <> genCont mode indent mtin
-genBody mode indent (ELet _ name (Binding params retTy trhs) mtin) =
+genBody scope mode indent (ELet _ name (Binding [] _ trhs) mtin) =
+  let (goName, scope') = bindName scope name
+  in ind indent <> goName <> " := " <> genExpr scope trhs <> "\n"
+    <> useVar indent goName
+    <> genCont scope' mode indent mtin
+genBody scope mode indent (ELet _ name (Binding params retTy trhs) mtin) =
   -- Use var declaration + assignment for local functions to support recursion.
   -- Go closures can't reference themselves with :=, but can with var + =.
-  let paramsText = paramListGoText params
+  let (goName, scope') = bindName scope name
+      -- Bind the function name before generating the body, so recursive
+      -- calls resolve to the correct name.
+      paramScope = bindParams scope' params
+      paramsText = paramListGoText params
       funcTy = "func(" <> paramsText <> ")" <> retTypeGoText retTy
    in ind indent
         <> "var "
-        <> identText name
+        <> goName
         <> " "
         <> funcTy
         <> "\n"
         <> ind indent
-        <> identText name
+        <> goName
         <> " = "
-        <> genLocalFunc indent paramsText retTy trhs
+        <> genLocalFunc paramScope indent paramsText retTy trhs
         <> "\n"
-        <> useVar indent (identText name)
-        <> genCont mode indent mtin
-genBody Void indent te
-  | isStmt (exprAnn te) = ind indent <> genExpr te <> "\n"
-  | otherwise = ind indent <> "_ = " <> genExpr te <> "\n"
-genBody Returning indent te = ind indent <> "return " <> genExpr te <> "\n"
+        <> useVar indent goName
+        <> genCont scope' mode indent mtin
+genBody scope Void indent te
+  | isStmt (exprAnn te) = ind indent <> genExpr scope te <> "\n"
+  | otherwise = ind indent <> "_ = " <> genExpr scope te <> "\n"
+genBody scope Returning indent te = ind indent <> "return " <> genExpr scope te <> "\n"
 
 -- Wrap a compound expression in an immediately-invoked function expression.
 -- Three cases:
---   void + side effects → func() struct{} { <Void body>; return struct{}{} }()
---   void + pure         → struct{}{}
---   non-void            → func() T { <Returning body> }()
-genExprIIFE :: Expr -> T.Text
-genExprIIFE e = case exprAnn e of
+--   void + side effects -> func() struct{} { <Void body>; return struct{}{} }()
+--   void + pure         -> struct{}{}
+--   non-void            -> func() T { <Returning body> }()
+genExprIIFE :: Scope -> Expr -> T.Text
+genExprIIFE scope e = case exprAnn e of
   ExprAnn{ty = UnitType, isStmt = True} ->
-    "func() struct{} {\n" <> genBody Void 1 e <> "\treturn struct{}{}\n}()"
+    "func() struct{} {\n" <> genBody scope Void 1 e <> "\treturn struct{}{}\n}()"
   ExprAnn{ty = UnitType} -> "struct{}{}"
   ExprAnn{ty = t} ->
-    "func() " <> typeExprGoText t <> " {\n" <> genBody Returning 1 e <> "}()"
+    "func() " <> typeExprGoText t <> " {\n" <> genBody scope Returning 1 e <> "}()"
 
--- Generate a Go expression from an Expr.
--- For Application nodes, the function's Expr carries its type, enabling
--- arity-aware partial application codegen.
 -- Map foglang operators to Go operators (triple-char bitwise/shift -> Go equivalents)
 goInfixOp :: T.Text -> T.Text
 goInfixOp "|||" = "|"
@@ -296,61 +341,59 @@ goInfixOp "<<<" = "<<"
 goInfixOp ">>>" = ">>"
 goInfixOp op = op
 
-genExpr :: Expr -> T.Text
-genExpr (EVar _ i) = identText i
-genExpr (EIntLit _ lit) = intLitText lit
-genExpr (EFloatLit _ lit) = floatLitText lit
-genExpr (EStrLit _ (StringLit t)) = "\"" <> t <> "\""
-genExpr (EUnitLit _) = "struct{}{}"
-genExpr (EVariadicSpread _ te) = genExpr te <> "..."
-genExpr (EIndex _ te tidx) = genExpr te <> "[" <> genExpr tidx <> "]"
-genExpr (EInfixOp _ e1 "::" e2) = "append(" <> typeExprGoText (exprType e2) <> "{" <> genExpr e1 <> "}, " <> genExpr e2 <> "...)"
-genExpr (EInfixOp _ e1 op e2) = "(" <> genExpr e1 <> " " <> goInfixOp op <> " " <> genExpr e2 <> ")"
-genExpr (EApplication _ tf targs) =
+genExpr :: Scope -> Expr -> T.Text
+genExpr scope (EVar _ i) = resolveName scope i
+genExpr _ (EIntLit _ lit) = intLitText lit
+genExpr _ (EFloatLit _ lit) = floatLitText lit
+genExpr _ (EStrLit _ (StringLit t)) = "\"" <> t <> "\""
+genExpr _ (EUnitLit _) = "struct{}{}"
+genExpr scope (EVariadicSpread _ te) = genExpr scope te <> "..."
+genExpr scope (EIndex _ te tidx) = genExpr scope te <> "[" <> genExpr scope tidx <> "]"
+genExpr scope (EInfixOp _ e1 "::" e2) = "append(" <> typeExprGoText (exprType e2) <> "{" <> genExpr scope e1 <> "}, " <> genExpr scope e2 <> "...)"
+genExpr scope (EInfixOp _ e1 op e2) = "(" <> genExpr scope e1 <> " " <> goInfixOp op <> " " <> genExpr scope e2 <> ")"
+genExpr scope (EApplication _ tf targs) =
   case exprType tf of
     TFunc fixedTys mVarTy retTy ->
       let nFixed = length fixedTys
           nSupplied = length targs
-          -- Partial when not all fixed args supplied, or when all fixed params
-          -- supplied but the variadic arg slot is still empty.
           isPartial = nSupplied < nFixed || (nSupplied == nFixed && mVarTy /= Nothing)
        in if isPartial
             then
               let (closureParams, argNames) = closureParamsAndCallArgs (drop nSupplied fixedTys) mVarTy
-                  callArgs = T.intercalate ", " (map genExpr targs ++ argNames)
-               in genInlineFunc closureParams retTy (genExpr tf <> "(" <> callArgs <> ")")
+                  callArgs = T.intercalate ", " (map (genExpr scope) targs ++ argNames)
+               in genInlineFunc closureParams retTy (genExpr scope tf <> "(" <> callArgs <> ")")
             else
               let args = case mVarTy of
                     Nothing ->
                       -- Strip the () sentinel the parser emits for zero-arg calls.
-                      if nFixed == 0 then [] else map genExpr targs
+                      if nFixed == 0 then [] else map (genExpr scope) targs
                     Just _ ->
                       -- Strip a single () sentinel (empty variadic arg provided).
                       -- EVariadicSpread nodes emit expr... via genExpr.
                       let varArgs = case drop nFixed targs of
                             [EUnitLit _] -> []
                             rest -> rest
-                       in map genExpr (take nFixed targs) ++ map genExpr varArgs
-               in genExpr tf <> "(" <> T.intercalate ", " args <> ")"
-    _ -> genExpr tf <> "(" <> T.intercalate ", " (map genExpr targs) <> ")"
-genExpr e@(EIf {}) = genExprIIFE e
-genExpr (ESequence _ []) = error "genExpr: empty ESequence should not reach expression context"
-genExpr e@(ESequence {}) = genExprIIFE e
-genExpr e@(ELet _ _ _ (Just _)) = genExprIIFE e
-genExpr (ELet _ _ _ Nothing) = error "genExpr: ELet without continuation should be in statement context"
-genExpr (ESliceLit ExprAnn{ty = TSlice (TNamed (Ident "opaque"))} []) = "nil"
-genExpr (ESliceLit ExprAnn{ty = t} []) = typeExprGoText t <> "{}"
-genExpr (ESliceLit ExprAnn{ty = t} texprs) = typeExprGoText t <> "{" <> T.intercalate ", " (map genExpr texprs) <> "}"
-genExpr (EMapLit ExprAnn{ty = TMap (TNamed (Ident "opaque")) (TNamed (Ident "opaque"))}) = "nil"
-genExpr (EMapLit ExprAnn{ty = t}) = typeExprGoText t <> "{}"
-genExpr e@(EMatch {}) = genExprIIFE e
-genExpr (ELambda _ (Binding params retTy tbody@(ESequence {}))) =
-  genLocalFunc 0 (paramListGoText params) retTy tbody
-genExpr (ELambda _ (Binding params retTy tbody)) =
-  genInlineFunc (paramListGoText params) retTy (genExpr tbody)
+                       in map (genExpr scope) (take nFixed targs) ++ map (genExpr scope) varArgs
+               in genExpr scope tf <> "(" <> T.intercalate ", " args <> ")"
+    _ -> genExpr scope tf <> "(" <> T.intercalate ", " (map (genExpr scope) targs) <> ")"
+genExpr scope e@(EIf {}) = genExprIIFE scope e
+genExpr _ (ESequence _ []) = error "genExpr: empty ESequence should not reach expression context"
+genExpr scope e@(ESequence {}) = genExprIIFE scope e
+genExpr scope e@(ELet _ _ _ (Just _)) = genExprIIFE scope e
+genExpr _ (ELet _ _ _ Nothing) = error "genExpr: ELet without continuation should be in statement context"
+genExpr _ (ESliceLit ExprAnn{ty = TSlice (TNamed (Ident "opaque"))} []) = "nil"
+genExpr _ (ESliceLit ExprAnn{ty = t} []) = typeExprGoText t <> "{}"
+genExpr scope (ESliceLit ExprAnn{ty = t} texprs) = typeExprGoText t <> "{" <> T.intercalate ", " (map (genExpr scope) texprs) <> "}"
+genExpr _ (EMapLit ExprAnn{ty = TMap (TNamed (Ident "opaque")) (TNamed (Ident "opaque"))}) = "nil"
+genExpr _ (EMapLit ExprAnn{ty = t}) = typeExprGoText t <> "{}"
+genExpr scope e@(EMatch {}) = genExprIIFE scope e
+genExpr scope (ELambda _ (Binding params retTy tbody@(ESequence {}))) =
+  genLocalFunc scope 0 (paramListGoText params) retTy tbody
+genExpr scope (ELambda _ (Binding params retTy tbody)) =
+  genInlineFunc (paramListGoText params) retTy (genExpr scope tbody)
 -- Function-type coercion wrapper: generates a wrapper lambda that forwards
 -- args and adjusts the return type in the unit<->struct{} dimension.
-genExpr (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
+genExpr scope (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
   case (targetTy, exprType inner) of
     -- () return -> struct{} return
     ( TFunc fixedTys mVarTy (TNamed (Ident "struct{}")),
@@ -360,7 +403,7 @@ genExpr (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
           mVarTy == mVarTy' ->
             let (closureParams, argNames) = closureParamsAndCallArgs fixedTys mVarTy
                 callArgs = T.intercalate ", " argNames
-             in "func(" <> closureParams <> ") struct{} { " <> genExpr inner <> "(" <> callArgs <> "); return struct{}{} }"
+             in "func(" <> closureParams <> ") struct{} { " <> genExpr scope inner <> "(" <> callArgs <> "); return struct{}{} }"
     -- struct{} return -> () return
     ( TFunc fixedTys mVarTy UnitType,
       TFunc fixedTys' mVarTy' (TNamed (Ident "struct{}"))
@@ -369,7 +412,7 @@ genExpr (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
           mVarTy == mVarTy' ->
             let (closureParams, argNames) = closureParamsAndCallArgs fixedTys mVarTy
                 callArgs = T.intercalate ", " argNames
-             in "func(" <> closureParams <> ") { " <> genExpr inner <> "(" <> callArgs <> ") }"
+             in "func(" <> closureParams <> ") { " <> genExpr scope inner <> "(" <> callArgs <> ") }"
     _ -> error $ "genExpr ECoerce FuncVoidCoerce: unhandled types " <> show (exprType inner) <> " -> " <> show targetTy
 
 genImport :: ImportDecl -> T.Text
@@ -385,28 +428,38 @@ genHeader (Header (PackageClause pkg) imports) =
     <> "\n"
     <> T.concat (map genImport imports)
 
-genDecl :: Ident -> [Param] -> TypeExpr -> Expr -> T.Text
-genDecl name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> genExpr tbody <> "\n"
-genDecl name params retTy tbody =
-  "func "
+genDecl :: Scope -> Ident -> [Param] -> TypeExpr -> Expr -> T.Text
+genDecl scope name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> genExpr scope tbody <> "\n"
+genDecl scope name params retTy tbody =
+  let paramScope = bindParams scope params
+  in "func "
     <> identText name
     <> "("
     <> paramListGoText params
     <> ")"
     <> retTypeGoText retTy
     <> " {\n"
-    <> bodyText 1 tbody
+    <> bodyText paramScope 1 tbody
     <> "}\n"
   where
-    bodyText = case retTy of
-      UnitType -> genBody Void
-      _ -> genBody Returning
+    bodyText bodySc = case retTy of
+      UnitType -> genBody bodySc Void
+      _ -> genBody bodySc Returning
 
-genPackageLevel :: Expr -> T.Text
-genPackageLevel (ELet _ n (Binding p t trhs) mtin) = genDecl n p t trhs <> maybe "" genPackageLevel mtin
-genPackageLevel (ESequence _ texprs) = T.concat (map genPackageLevel texprs)
-genPackageLevel e
-  | isStmt (exprAnn e) = "func init() {\n" <> genBody Void 1 e <> "}\n"
+genPackageLevel :: Scope -> Expr -> (T.Text, Scope)
+genPackageLevel scope (ELet _ n (Binding p t trhs) mtin) =
+  let (goName, scope') = bindName scope n
+      -- Value bindings: RHS uses old scope (before this binding).
+      -- Function bindings: body uses new scope (for recursion).
+      rhsScope = case p of [] -> scope; _ -> scope'
+      declText = genDecl rhsScope (Ident goName) p t trhs
+  in case mtin of
+    Nothing -> (declText, scope')
+    Just tin -> let (rest, scope'') = genPackageLevel scope' tin in (declText <> rest, scope'')
+genPackageLevel scope (ESequence _ texprs) =
+  foldl (\(acc, s) e -> let (t, s') = genPackageLevel s e in (acc <> t, s')) ("", scope) texprs
+genPackageLevel scope e
+  | isStmt (exprAnn e) = ("func init() {\n" <> genBody scope Void 1 e <> "}\n", scope)
   | otherwise = error $ "unsupported top-level expression: " <> show e
 
 genGoFile :: FogFile -> IO T.Text
@@ -414,6 +467,7 @@ genGoFile (FogFile hdr body) = do
   let tbody = case inferAndResolve body of
         Right te -> te
         Left errs -> error $ "inference errors: " <> show errs
-      raw = genHeader hdr <> genPackageLevel tbody
+      (bodyText, _) = genPackageLevel emptyScope tbody
+      raw = genHeader hdr <> bodyText
   formatted <- readProcess "gofmt" [] (T.unpack raw)
   return $ T.pack formatted
