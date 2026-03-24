@@ -122,6 +122,17 @@ func second(x int) int {
 		return (x * 3)
 	}
 }
+func greet(name string) string {
+	_scrut1 := name
+	_ = _scrut1
+	if _scrut1 == "Alice" {
+		return "hello Alice!"
+	} else if _scrut1 == "Bob" {
+		return "hey Bob"
+	} else {
+		return "hi stranger"
+	}
+}
 func main() {
 	fmt.Println(describe(0))
 	fmt.Println(describe(1))
@@ -129,4 +140,7 @@ func main() {
 	fmt.Println(testSiblings(5))
 	fmt.Println(first(3))
 	fmt.Println(second(4))
+	fmt.Println(greet("Alice"))
+	fmt.Println(greet("Bob"))
+	fmt.Println(greet("Charlie"))
 }

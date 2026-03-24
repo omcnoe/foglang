@@ -252,6 +252,7 @@ patternBindingsTyped :: TypeExpr -> Pattern -> Infer [(Ident, TypeExpr)]
 patternBindingsTyped _ PtWildcard = return []
 patternBindingsTyped t (PtVar i) = return [(i, t)]
 patternBindingsTyped _ (PtIntLit _) = return []
+patternBindingsTyped _ (PtStrLit _) = return []
 patternBindingsTyped _ (PtBoolLit _) = return []
 patternBindingsTyped _ PtSliceEmpty = return []
 patternBindingsTyped t (PtCons hd tl) = do
@@ -274,6 +275,7 @@ unifyPattern p scrutTy (PtBoolLit _) = unifyM p scrutTy (TNamed (Ident "bool"))
 unifyPattern p scrutTy (PtIntLit _) = do
   tc <- freshConstrained TSInt
   unifyM p scrutTy tc
+unifyPattern p scrutTy (PtStrLit _) = unifyM p scrutTy (TNamed (Ident "string"))
 unifyPattern p scrutTy PtSliceEmpty = do
   elemTv <- freshTVar
   unifyM p scrutTy (TSlice elemTv)
@@ -450,10 +452,12 @@ inferExpr env (EApplication ExprAnn{pos = p} f args) = do
           let fixedPairs = zip targs fixed
           mapM_ (\(arg, paramTy) ->
                     unifyM p (exprType arg) paramTy) fixedPairs
-          -- Variadic args
-          if nSupplied > nFixed
-            then do
-              let varArgs = drop nFixed targs
+          -- Variadic args: a lone () after fixed args is the "no variadic args"
+          -- sentinel from the parser (same ambiguity as isZeroArgCall above).
+          let varArgs = drop nFixed targs
+              isZeroVariadicCall = case varArgs of [EUnitLit _] -> True; _ -> False
+          if not isZeroVariadicCall && nSupplied > nFixed
+            then
               mapM_ (\arg ->
                 case arg of
                   EVariadicSpread {} -> unifyM p (exprType arg) (TSlice varTy)

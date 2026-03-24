@@ -67,6 +67,13 @@ let second (x : int) => int =
     | 0 => 0
     | _ => x * 3
 
+// String literal patterns
+let greet (name : string) => string =
+  match name with
+    | "Alice" => "hello Alice!"
+    | "Bob" => "hey Bob"
+    | _ => "hi stranger"
+
 let main () => () =
   fmt.Println (describe 0)
   fmt.Println (describe 1)
@@ -74,3 +81,6 @@ let main () => () =
   fmt.Println (testSiblings 5)
   fmt.Println (first 3)
   fmt.Println (second 4)
+  fmt.Println (greet "Alice")
+  fmt.Println (greet "Bob")
+  fmt.Println (greet "Charlie")

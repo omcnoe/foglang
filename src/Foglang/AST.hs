@@ -182,6 +182,7 @@ data Pattern
   = PtWildcard -- _
   | PtVar Ident -- variable binding
   | PtIntLit IntLit -- integer literal
+  | PtStrLit StringLit -- string literal
   | PtBoolLit Bool -- true, false
   | PtSliceEmpty -- []
   | PtCons Pattern Pattern -- x :: rest

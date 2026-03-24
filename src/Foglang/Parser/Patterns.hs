@@ -4,6 +4,7 @@ import Foglang.AST (Pattern (..))
 import Foglang.Parser (Parser, SC, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Foglang.Parser.IntLit (intLit)
+import Foglang.Parser.StringLit (stringLit)
 import Text.Megaparsec (sepBy1, try, (<|>))
 
 pattern' :: SC -> Parser Pattern
@@ -25,6 +26,7 @@ atomicPattern sc' =
     <|> (PtBoolLit True <$ lexeme sc' (keyword "true"))
     <|> (PtBoolLit False <$ lexeme sc' (keyword "false"))
     <|> try (PtIntLit <$> lexeme sc' intLit)
+    <|> try (PtStrLit <$> lexeme sc' stringLit)
     <|> try (PtWildcard <$ lexeme sc' (keyword "_"))
     <|> (PtVar <$> lexeme sc' ident)
 
