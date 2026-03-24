@@ -5,7 +5,7 @@ import Data.Bifunctor (first)
 import Data.Map.Strict qualified as Map
 import Data.Semigroup (Max (..))
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprPos, exprType, exprTypes)
+import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes)
 import Text.Megaparsec.Pos (SourcePos)
 
 -- Environment mapping names to their types.
@@ -53,17 +53,19 @@ putSubst s = modify (\st -> st { inferSubst = s })
 
 -- Wrapper: run pure unify, update state on success, throw on error
 unifyM :: SourcePos -> TypeExpr -> TypeExpr -> Infer ()
-unifyM pos t1 t2 = do
+unifyM p t1 t2 = do
   s <- getSubst
-  case unify pos s t1 t2 of
+  case unify p s t1 t2 of
     Left err -> lift (Left err)
     Right s' -> putSubst s'
 
 -- Wrapper: apply current substitution
 applySubstM :: TypeExpr -> Infer TypeExpr
-applySubstM ty = do
+applySubstM t = do
   s <- getSubst
-  return (applySubst s ty)
+  return (applySubst s t)
+
+
 
 -- Built-in names that are always in scope.
 preludeEnv :: Env
@@ -143,7 +145,7 @@ logicalOps = ["&&", "||"]
 -- Unify two types, returning updated substitution or error.
 -- IMPORTANT: applies current substitution to both sides first.
 unify :: SourcePos -> Subst -> TypeExpr -> TypeExpr -> Either InferError Subst
-unify pos s t1 t2 = unify' pos s (applySubst s t1) (applySubst s t2)
+unify p s t1 t2 = unify' p s (applySubst s t1) (applySubst s t2)
 
 -- Unify two types that have already had substitution applied.
 unify' :: SourcePos -> Subst -> TypeExpr -> TypeExpr -> Either InferError Subst
@@ -151,18 +153,18 @@ unify' :: SourcePos -> Subst -> TypeExpr -> TypeExpr -> Either InferError Subst
 unify' _ s t1 _ | isWildcard t1 = Right s
 unify' _ s _ t2 | isWildcard t2 = Right s
 -- TConstrained ~ TConstrained: intersect the sets
-unify' pos s (TConstrained n s1) (TConstrained m s2)
+unify' p s (TConstrained n s1) (TConstrained m s2)
   | n == m = Right s
   | otherwise = case intersectTypeSet s1 s2 of
       Just si -> Right (Map.insert m (TConstrained n si) s)
-      Nothing -> Left (TypeMismatch pos (TConstrained n s1) (TConstrained m s2))
+      Nothing -> Left (TypeMismatch p (TConstrained n s1) (TConstrained m s2))
 -- TConstrained ~ TNamed: check membership
-unify' pos s (TConstrained n ts) (TNamed t)
+unify' p s (TConstrained n ts) (TNamed t)
   | inTypeSet ts t = Right (Map.insert n (TNamed t) s)
-  | otherwise = Left (TypeMismatch pos (TConstrained n ts) (TNamed t))
-unify' pos s (TNamed t) (TConstrained n ts)
+  | otherwise = Left (TypeMismatch p (TConstrained n ts) (TNamed t))
+unify' p s (TNamed t) (TConstrained n ts)
   | inTypeSet ts t = Right (Map.insert n (TNamed t) s)
-  | otherwise = Left (TypeMismatch pos (TNamed t) (TConstrained n ts))
+  | otherwise = Left (TypeMismatch p (TNamed t) (TConstrained n ts))
 -- TConstrained ~ TVar: propagate the constraint
 unify' _ s (TConstrained n ts) (TVar m)
   | n == m = Right s
@@ -171,44 +173,44 @@ unify' _ s (TVar m) (TConstrained n ts)
   | n == m = Right s
   | otherwise = Right (Map.insert m (TConstrained n ts) s)
 -- TVar on left
-unify' pos s (TVar n) t2
+unify' p s (TVar n) t2
   | TVar n == t2 = Right s
-  | occursIn n t2 = Left (OccursCheck pos n t2)
+  | occursIn n t2 = Left (OccursCheck p n t2)
   | otherwise = Right (Map.insert n t2 s)
 -- TVar on right
-unify' pos s t1 (TVar n)
-  | occursIn n t1 = Left (OccursCheck pos n t1)
+unify' p s t1 (TVar n)
+  | occursIn n t1 = Left (OccursCheck p n t1)
   | otherwise = Right (Map.insert n t1 s)
 -- Named types
-unify' pos s (TNamed a) (TNamed b)
+unify' p s (TNamed a) (TNamed b)
   | a == b = Right s
   | isUnitLike a && isUnitLike b = Right s
-  | otherwise = Left (TypeMismatch pos (TNamed a) (TNamed b))
+  | otherwise = Left (TypeMismatch p (TNamed a) (TNamed b))
 -- Slice types
-unify' pos s (TSlice a) (TSlice b) = unify pos s a b
+unify' p s (TSlice a) (TSlice b) = unify p s a b
 -- Map types
-unify' pos s (TMap k1 v1) (TMap k2 v2) = do
-  s' <- unify pos s k1 k2
-  unify pos s' v1 v2
+unify' p s (TMap k1 v1) (TMap k2 v2) = do
+  s' <- unify p s k1 k2
+  unify p s' v1 v2
 -- Function types
-unify' pos s (TFunc as va ra) (TFunc bs vb rb)
-  | length as /= length bs = Left (TypeMismatch pos (TFunc as va ra) (TFunc bs vb rb))
+unify' p s (TFunc as va ra) (TFunc bs vb rb)
+  | length as /= length bs = Left (TypeMismatch p (TFunc as va ra) (TFunc bs vb rb))
   | otherwise = do
-      s' <- unifyList pos s as bs
+      s' <- unifyList p s as bs
       s'' <- case (va, vb) of
         (Nothing, Nothing) -> Right s'
-        (Just a, Just b) -> unify pos s' a b
-        _ -> Left (TypeMismatch pos (TFunc as va ra) (TFunc bs vb rb))
-      unify pos s'' ra rb
+        (Just a, Just b) -> unify p s' a b
+        _ -> Left (TypeMismatch p (TFunc as va ra) (TFunc bs vb rb))
+      unify p s'' ra rb
 -- Mismatched constructors
-unify' pos _ t1 t2 = Left (TypeMismatch pos t1 t2)
+unify' p _ t1 t2 = Left (TypeMismatch p t1 t2)
 
 -- Unify two lists element-wise.
 unifyList :: SourcePos -> Subst -> [TypeExpr] -> [TypeExpr] -> Either InferError Subst
 unifyList _ s [] [] = Right s
-unifyList pos s (a : as) (b : bs) = do
-  s' <- unify pos s a b
-  unifyList pos s' as bs
+unifyList p s (a : as) (b : bs) = do
+  s' <- unify p s a b
+  unifyList p s' as bs
 unifyList _ _ _ _ = error "unifyList: impossible - caller must ensure equal lengths"
 
 -- The result type when applying a function to nArgs arguments.
@@ -222,42 +224,42 @@ collectParamTypes n (TFunc fixed (Just _) _) = take n fixed  -- variadic stops f
 collectParamTypes _ _ = []  -- non-function, will be caught by applyType
 
 applyType :: SourcePos -> TypeExpr -> Int -> Either InferError TypeExpr
-applyType pos (TFunc fixed mVar ret) n =
+applyType p (TFunc fixed mVar ret) n =
   case mVar of
     Nothing
       | n == length fixed -> Right ret
       | n < length fixed -> Right (TFunc (drop n fixed) Nothing ret)
-      | otherwise -> applyType pos ret (n - length fixed)  -- recurse into return type
+      | otherwise -> applyType p ret (n - length fixed)  -- recurse into return type
     Just varTy
       | n > length fixed -> Right ret
       | n == length fixed -> Right (TFunc [] (Just varTy) ret)
       | otherwise -> Right (TFunc (drop n fixed) (Just varTy) ret)
 applyType _ (TNamed (Ident "opaque")) _ = Right (TNamed (Ident "opaque"))
-applyType pos t _ = Left (NotAFunction pos t)
+applyType p t _ = Left (NotAFunction p t)
 
 -- Reject named unit params (name : ())
 -- () as a named param type has no representable function type due to zero-param rewrite.
 -- Use (name : struct{}) instead.
 checkNoNamedPUnits :: SourcePos -> [Param] -> Either InferError ()
 checkNoNamedPUnits _ [] = Right ()
-checkNoNamedPUnits pos (PTyped name UnitType : _) = Left (NamedPUnit pos name)
-checkNoNamedPUnits pos (_ : rest) = checkNoNamedPUnits pos rest
+checkNoNamedPUnits p (PTyped name UnitType : _) = Left (NamedPUnit p name)
+checkNoNamedPUnits p (_ : rest) = checkNoNamedPUnits p rest
 
 -- Extract variable bindings from a pattern, using the scrutinee type to give
 -- pattern variables their types. The scrutinee type should have substitution
 -- applied before calling this function.
 patternBindingsTyped :: TypeExpr -> Pattern -> Infer [(Ident, TypeExpr)]
 patternBindingsTyped _ PtWildcard = return []
-patternBindingsTyped ty (PtVar i) = return [(i, ty)]
+patternBindingsTyped t (PtVar i) = return [(i, t)]
 patternBindingsTyped _ (PtIntLit _) = return []
 patternBindingsTyped _ (PtBoolLit _) = return []
 patternBindingsTyped _ PtSliceEmpty = return []
-patternBindingsTyped ty (PtCons hd tl) = do
-  elemTy <- case ty of
-    TSlice t -> return t
+patternBindingsTyped t (PtCons hd tl) = do
+  elemTy <- case t of
+    TSlice et -> return et
     _ -> freshTVar
   hdBindings <- patternBindingsTyped elemTy hd
-  tlBindings <- patternBindingsTyped ty tl
+  tlBindings <- patternBindingsTyped t tl
   return (hdBindings ++ tlBindings)
 patternBindingsTyped _ (PtTuple pats) = do
   results <- mapM (\p -> do { tv <- freshTVar; patternBindingsTyped tv p }) pats
@@ -268,16 +270,16 @@ patternBindingsTyped _ (PtTuple pats) = do
 unifyPattern :: SourcePos -> TypeExpr -> Pattern -> Infer ()
 unifyPattern _ _ PtWildcard = return ()
 unifyPattern _ _ (PtVar _) = return ()
-unifyPattern pos scrutTy (PtBoolLit _) = unifyM pos scrutTy (TNamed (Ident "bool"))
-unifyPattern pos scrutTy (PtIntLit _) = do
+unifyPattern p scrutTy (PtBoolLit _) = unifyM p scrutTy (TNamed (Ident "bool"))
+unifyPattern p scrutTy (PtIntLit _) = do
   tc <- freshConstrained TSInt
-  unifyM pos scrutTy tc
-unifyPattern pos scrutTy PtSliceEmpty = do
+  unifyM p scrutTy tc
+unifyPattern p scrutTy PtSliceEmpty = do
   elemTv <- freshTVar
-  unifyM pos scrutTy (TSlice elemTv)
-unifyPattern pos scrutTy (PtCons _ _) = do
+  unifyM p scrutTy (TSlice elemTv)
+unifyPattern p scrutTy (PtCons _ _) = do
   elemTv <- freshTVar
-  unifyM pos scrutTy (TSlice elemTv)
+  unifyM p scrutTy (TSlice elemTv)
 unifyPattern _ _ (PtTuple _) = return ()
 
 -- Result type of an infix operator: comparisons and logical operators always
@@ -290,136 +292,136 @@ infixOpResultType op lhsTy _
 
 -- The core inference function. Walks the Expr tree using the Infer monad.
 inferExpr :: Env -> Expr -> Infer Expr
-inferExpr env (EVar pos origTy i@(Ident t)) =
+inferExpr env (EVar ExprAnn{pos = p, ty = origTy} i@(Ident t)) =
   case Map.lookup i env of
-    Just ty -> do
-      unifyM pos origTy ty
-      return (EVar pos ty i)
+    Just envTy -> do
+      unifyM p origTy envTy
+      return (EVar ExprAnn { pos = p, ty = envTy, isStmt = False } i)
     Nothing
       -- Qualified names (e.g. fmt.Println) have no fog type; treat as opaque.
-      | "." `T.isInfixOf` t -> return (EVar pos (TNamed (Ident "opaque")) i)
-      | otherwise -> lift (Left (UnknownVariable pos i))
-inferExpr _ (EUnitLit pos) =
-  return (EUnitLit pos)
-inferExpr _ (EIntLit pos ty lit) =
+      | "." `T.isInfixOf` t -> return (EVar ExprAnn { pos = p, ty = TNamed (Ident "opaque"), isStmt = False } i)
+      | otherwise -> lift (Left (UnknownVariable p i))
+inferExpr _ (EUnitLit a) =
+  return (EUnitLit a)
+inferExpr _ (EIntLit a lit) =
   -- Keep the TVar if present — will be resolved by context or defaulted later
-  return (EIntLit pos ty lit)
-inferExpr _ (EFloatLit pos ty lit) =
-  return (EFloatLit pos ty lit)
-inferExpr _ (EStrLit pos ty lit) =
-  return (EStrLit pos ty lit)
-inferExpr env (EInfixOp pos _ e1 op e2) = do
+  return (EIntLit a lit)
+inferExpr _ (EFloatLit a lit) =
+  return (EFloatLit a lit)
+inferExpr _ (EStrLit a lit) =
+  return (EStrLit a lit)
+inferExpr env (EInfixOp ExprAnn{pos = p} e1 op e2) = do
   te1 <- inferExpr env e1
   te2 <- inferExpr env e2
   let lhsTy = exprType te1
       rhsTy = exprType te2
   case op of
-    "::" -> unifyM pos rhsTy (TSlice lhsTy)
+    "::" -> unifyM p rhsTy (TSlice lhsTy)
     _ | op `elem` comparisonOps ->
-        unifyM pos lhsTy rhsTy
+        unifyM p lhsTy rhsTy
     _ | op `elem` logicalOps -> do
-        unifyM pos lhsTy (TNamed (Ident "bool"))
-        unifyM pos rhsTy (TNamed (Ident "bool"))
+        unifyM p lhsTy (TNamed (Ident "bool"))
+        unifyM p rhsTy (TNamed (Ident "bool"))
     _ -> -- arithmetic/bitwise
-        unifyM pos lhsTy rhsTy
+        unifyM p lhsTy rhsTy
   s3 <- getSubst
   let resultTy = infixOpResultType op (applySubst s3 (exprType te1)) (applySubst s3 (exprType te2))
-  return (EInfixOp pos resultTy te1 op te2)
-inferExpr env (EIf pos _ cond then' else') = do
+  return (EInfixOp ExprAnn { pos = p, ty = resultTy, isStmt = False } te1 op te2)
+inferExpr env (EIf ExprAnn{pos = p} cond then' else') = do
   tcond <- inferExpr env cond
-  unifyM pos (exprType tcond) (TNamed (Ident "bool"))
+  unifyM p (exprType tcond) (TNamed (Ident "bool"))
   tthen <- inferExpr env then'
   telse <- inferExpr env else'
-  unifyM pos (exprType tthen) (exprType telse)
+  unifyM p (exprType tthen) (exprType telse)
   s5 <- getSubst
-  return (EIf pos (applySubst s5 (exprType tthen)) tcond tthen telse)
-inferExpr env (ESequence pos _ exprs) = do
+  return (EIf ExprAnn { pos = p, ty = applySubst s5 (exprType tthen), isStmt = False } tcond tthen telse)
+inferExpr env (ESequence ExprAnn{pos = p} exprs) = do
   texprs <- inferExprs env exprs
-  let ty = case texprs of
+  let resultTy = case texprs of
         [] -> UnitType
         _ -> exprType (last texprs)
-  return (ESequence pos ty texprs)
-inferExpr env (ELambda pos _ (Binding params retTy body)) = do
-  lift (checkNoNamedPUnits pos params)
+  return (ESequence ExprAnn { pos = p, ty = resultTy, isStmt = False } texprs)
+inferExpr env (ELambda ExprAnn{pos = p} (Binding params retTy body)) = do
+  lift (checkNoNamedPUnits p params)
   let paramEnv =
         Map.fromList $
-          [(name, ty) | PTyped name ty <- params]
-            ++ [(name, TSlice ty) | PVariadic name ty <- params]
+          [(name, t) | PTyped name t <- params]
+            ++ [(name, TSlice t) | PVariadic name t <- params]
   tbody <- inferExpr (Map.union paramEnv env) body
   -- Unify the declared return type with the inferred body type
-  unifyM pos retTy (exprType tbody)
+  unifyM p retTy (exprType tbody)
   s2 <- getSubst
   let lambdaTy = bindingType params (applySubst s2 retTy)
-  return (ELambda pos lambdaTy (Binding params retTy tbody))
-inferExpr env (ELet pos _ name (Binding params retTy rhs) mInExpr) = do
-  lift (checkNoNamedPUnits pos params)
-  let bindingTy = bindingType params retTy
-  let envWithSelf = Map.insert name bindingTy env
+  return (ELambda ExprAnn { pos = p, ty = lambdaTy, isStmt = False } (Binding params retTy tbody))
+inferExpr env (ELet ExprAnn{pos = p} name (Binding params retTy rhs) mInExpr) = do
+  lift (checkNoNamedPUnits p params)
+  let bindTy = bindingType params retTy
+  let envWithSelf = Map.insert name bindTy env
   let paramEnv =
         Map.fromList $
-          [(n, ty) | PTyped n ty <- params]
-            ++ [(n, TSlice ty) | PVariadic n ty <- params]
+          [(n, t) | PTyped n t <- params]
+            ++ [(n, TSlice t) | PVariadic n t <- params]
   trhs <- inferExpr (Map.union paramEnv envWithSelf) rhs
   -- Unify the declared return type with the inferred body type
-  unifyM pos retTy (exprType trhs)
+  unifyM p retTy (exprType trhs)
   -- Use resolved binding type for the continuation environment
   s2 <- getSubst
-  let resolvedBindingTy = applySubst s2 bindingTy
-  let envForCont = Map.insert name resolvedBindingTy env
+  let resolvedBindTy = applySubst s2 bindTy
+  let envForCont = Map.insert name resolvedBindTy env
   mtin <- traverse (inferExpr envForCont) mInExpr
   let resultTy = maybe UnitType exprType mtin
-  return (ELet pos resultTy name (Binding params retTy trhs) mtin)
-inferExpr env (EIndex pos _ e idx) = do
+  return (ELet ExprAnn { pos = p, ty = resultTy, isStmt = True } name (Binding params retTy trhs) mtin)
+inferExpr env (EIndex ExprAnn{pos = p} e idx) = do
   te <- inferExpr env e
   tidx <- inferExpr env idx
   containerTy <- applySubstM (exprType te)
   case containerTy of
     TSlice elemTy -> do
-      unifyM pos (exprType tidx) (TNamed (Ident "int"))
-      return (EIndex pos elemTy te tidx)
+      unifyM p (exprType tidx) (TNamed (Ident "int"))
+      return (EIndex ExprAnn { pos = p, ty = elemTy, isStmt = False } te tidx)
     TMap keyTy valTy -> do
-      unifyM pos (exprType tidx) keyTy
-      return (EIndex pos valTy te tidx)
+      unifyM p (exprType tidx) keyTy
+      return (EIndex ExprAnn { pos = p, ty = valTy, isStmt = False } te tidx)
     _ -> -- opaque, TVar, or other — can't determine index/result types
-      return (EIndex pos (TNamed (Ident "opaque")) te tidx)
-inferExpr env (ESliceLit pos _ exprs) = do
+      return (EIndex ExprAnn { pos = p, ty = TNamed (Ident "opaque"), isStmt = False } te tidx)
+inferExpr env (ESliceLit ExprAnn{pos = p} exprs) = do
   texprs <- inferExprs env exprs
   case texprs of
     [] -> do
       elemTv <- freshTVar
-      return (ESliceLit pos (TSlice elemTv) texprs)
+      return (ESliceLit ExprAnn { pos = p, ty = TSlice elemTv, isStmt = False } texprs)
     (te : rest) -> do
       -- Unify all element types together
-      mapM_ (\e' -> unifyM pos (exprType te) (exprType e')) rest
+      mapM_ (\e' -> unifyM p (exprType te) (exprType e')) rest
       s'' <- getSubst
       let elemTy = applySubst s'' (exprType te)
-      return (ESliceLit pos (TSlice elemTy) texprs)
-inferExpr _ (EMapLit pos _) = do
+      return (ESliceLit ExprAnn { pos = p, ty = TSlice elemTy, isStmt = False } texprs)
+inferExpr _ (EMapLit ExprAnn{pos = p}) = do
   kTv <- freshTVar
   vTv <- freshTVar
-  return (EMapLit pos (TMap kTv vTv))
-inferExpr env (EMatch pos _ scrut arms) = do
+  return (EMapLit ExprAnn { pos = p, ty = TMap kTv vTv, isStmt = False })
+inferExpr env (EMatch ExprAnn{pos = p} scrut arms) = do
   tscrut <- inferExpr env scrut
   tarms <- inferArms env tscrut arms
   -- Unify all arm body types together
   case tarms of
     [] -> return ()
     (MatchArm _ _ firstBody : rest) ->
-      mapM_ (\(MatchArm _ _ body) -> unifyM pos (exprType firstBody) (exprType body)) rest
+      mapM_ (\(MatchArm _ _ body) -> unifyM p (exprType firstBody) (exprType body)) rest
   s3 <- getSubst
   let resultTy = case tarms of
         (MatchArm _ _ body : _) -> applySubst s3 (exprType body)
         [] -> UnitType
-  return (EMatch pos resultTy tscrut tarms)
-inferExpr env (EVariadicSpread pos _ e) = do
+  return (EMatch ExprAnn { pos = p, ty = resultTy, isStmt = False } tscrut tarms)
+inferExpr env (EVariadicSpread ExprAnn{pos = p} e) = do
   te <- inferExpr env e
   s1 <- getSubst
   case applySubst s1 (exprType te) of
-    st@(TSlice _) -> return (EVariadicSpread pos st te)
-    ty@(TNamed (Ident "opaque")) -> return (EVariadicSpread pos ty te)
-    ty@(TVar _) -> return (EVariadicSpread pos ty te) -- may resolve later
-    ty -> lift (Left (InvalidSpread pos ty))
-inferExpr env (EApplication pos _ f args) = do
+    st@(TSlice _) -> return (EVariadicSpread ExprAnn { pos = p, ty = st, isStmt = False } te)
+    t@(TNamed (Ident "opaque")) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te)
+    t@(TVar _) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te) -- may resolve later
+    t -> lift (Left (InvalidSpread p t))
+inferExpr env (EApplication ExprAnn{pos = p} f args) = do
   tf <- inferExpr env f
   targs <- inferExprs env args
   s2 <- getSubst
@@ -437,38 +439,38 @@ inferExpr env (EApplication pos _ f args) = do
           let allParamTys = collectParamTypes nSupplied fTy
               allPairs = zip targs allParamTys
           mapM_ (\(arg, paramTy) ->
-                    unifyM pos (exprType arg) paramTy) allPairs
+                    unifyM p (exprType arg) paramTy) allPairs
         Just varTy -> do
           -- Fixed params first
           let fixedPairs = zip targs fixed
           mapM_ (\(arg, paramTy) ->
-                    unifyM pos (exprType arg) paramTy) fixedPairs
+                    unifyM p (exprType arg) paramTy) fixedPairs
           -- Variadic args
           if nSupplied > nFixed
             then do
               let varArgs = drop nFixed targs
               mapM_ (\arg ->
                 case arg of
-                  EVariadicSpread {} -> unifyM pos (exprType arg) (TSlice varTy)
+                  EVariadicSpread {} -> unifyM p (exprType arg) (TSlice varTy)
                   _ -> do
                     resolvedArgTy <- applySubstM (exprType arg)
                     case resolvedArgTy of
                       TSlice _ -> lift (Left (MissingSpread (exprPos arg) resolvedArgTy))
-                      _ -> unifyM pos (exprType arg) varTy) varArgs
+                      _ -> unifyM p (exprType arg) varTy) varArgs
             else return ()
       -- Use post-unification function type for accurate result type
       s4 <- getSubst
-      resultTy <- lift (applyType pos (applySubst s4 fTy) nSupplied)
-      return (EApplication pos resultTy tf targs)
+      resultTy <- lift (applyType p (applySubst s4 fTy) nSupplied)
+      return (EApplication ExprAnn { pos = p, ty = resultTy, isStmt = True } tf targs)
     nt@(TNamed (Ident "opaque")) -> do
-      resultTy <- lift (applyType pos nt (length targs))
-      return (EApplication pos resultTy tf targs)
+      resultTy <- lift (applyType p nt (length targs))
+      return (EApplication ExprAnn { pos = p, ty = resultTy, isStmt = True } tf targs)
     TVar _ -> do
       resultTv <- freshTVar
       let argTypes = map exprType targs
-      unifyM pos fTy (TFunc argTypes Nothing resultTv)
-      return (EApplication pos resultTv tf targs)
-    _ -> lift (Left (NotAFunction pos fTy))
+      unifyM p fTy (TFunc argTypes Nothing resultTv)
+      return (EApplication ExprAnn { pos = p, ty = resultTv, isStmt = True } tf targs)
+    _ -> lift (Left (NotAFunction p fTy))
 
 -- Infer a list of expressions left-to-right, threading substitution through
 -- so that constraints from earlier expressions are visible to later ones.
@@ -483,9 +485,9 @@ inferArms _ _ [] = return []
 inferArms env tscrut (MatchArm armPos pat body : rest) = do
   s <- getSubst
   let scrutTy = applySubst s (exprType tscrut)
-      pos = exprPos tscrut
+      p = exprPos tscrut
   -- Generate constraints from the pattern
-  unifyPattern pos scrutTy pat
+  unifyPattern p scrutTy pat
   s0 <- getSubst
   patBindings <- patternBindingsTyped (applySubst s0 scrutTy) pat
   let armEnv = Map.union (Map.fromList patBindings) env
@@ -503,17 +505,17 @@ foldMapExpr :: Monoid m => (Expr -> m) -> Expr -> m
 foldMapExpr f expr = f expr <> children
   where
     children = case expr of
-      EInfixOp _ _ e1 _ e2       -> foldMapExpr f e1 <> foldMapExpr f e2
-      EIf _ _ c t e              -> foldMapExpr f c <> foldMapExpr f t <> foldMapExpr f e
-      ESequence _ _ es           -> foldMap (foldMapExpr f) es
-      ELambda _ _ (Binding _ _ body) -> foldMapExpr f body
-      ELet _ _ _ (Binding _ _ rhs) mInE -> foldMapExpr f rhs <> foldMap (foldMapExpr f) mInE
-      EIndex _ _ e idx           -> foldMapExpr f e <> foldMapExpr f idx
-      ESliceLit _ _ es           -> foldMap (foldMapExpr f) es
-      EVariadicSpread _ _ e      -> foldMapExpr f e
-      EApplication _ _ fn args   -> foldMapExpr f fn <> foldMap (foldMapExpr f) args
-      EMatch _ _ scrut arms      -> foldMapExpr f scrut <> foldMap (\(MatchArm _ _ body) -> foldMapExpr f body) arms
-      _                          -> mempty  -- EVar, EUnitLit, EIntLit, EFloatLit, EStrLit, EMapLit
+      EInfixOp _ e1 _ e2          -> foldMapExpr f e1 <> foldMapExpr f e2
+      EIf _ c t e                 -> foldMapExpr f c <> foldMapExpr f t <> foldMapExpr f e
+      ESequence _ es              -> foldMap (foldMapExpr f) es
+      ELambda _ (Binding _ _ body) -> foldMapExpr f body
+      ELet _ _ (Binding _ _ rhs) mInE -> foldMapExpr f rhs <> foldMap (foldMapExpr f) mInE
+      EIndex _ e idx              -> foldMapExpr f e <> foldMapExpr f idx
+      ESliceLit _ es              -> foldMap (foldMapExpr f) es
+      EVariadicSpread _ e         -> foldMapExpr f e
+      EApplication _ fn args      -> foldMapExpr f fn <> foldMap (foldMapExpr f) args
+      EMatch _ scrut arms         -> foldMapExpr f scrut <> foldMap (\(MatchArm _ _ body) -> foldMapExpr f body) arms
+      _                           -> mempty  -- EVar, EUnitLit, EIntLit, EFloatLit, EStrLit, EMapLit
 
 -- | Map a function over every TypeExpr in an Expr tree.
 -- Transforms the type on each node, types inside Binding params, and Binding retTy.
@@ -521,30 +523,30 @@ foldMapExpr f expr = f expr <> children
 mapExprTypes :: (TypeExpr -> TypeExpr) -> Expr -> Expr
 mapExprTypes f = go
   where
-    go (EVar p t i)            = EVar p (f t) i
-    go (EUnitLit p)            = EUnitLit p
-    go (EIntLit p t lit)       = EIntLit p (f t) lit
-    go (EFloatLit p t lit)     = EFloatLit p (f t) lit
-    go (EStrLit p t lit)       = EStrLit p (f t) lit
-    go (EInfixOp p t e1 op e2) = EInfixOp p (f t) (go e1) op (go e2)
-    go (EIf p t c th el)      = EIf p (f t) (go c) (go th) (go el)
-    go (ESequence p t es)      = ESequence p (f t) (map go es)
-    go (ELambda p t (Binding params retTy body)) =
-      ELambda p (f t) (Binding (map goParam params) (f retTy) (go body))
-    go (ELet p t name (Binding params retTy rhs) mInE) =
-      ELet p (f t) name (Binding (map goParam params) (f retTy) (go rhs)) (fmap go mInE)
-    go (EIndex p t e idx)      = EIndex p (f t) (go e) (go idx)
-    go (ESliceLit p t es)      = ESliceLit p (f t) (map go es)
-    go (EMapLit p t)           = EMapLit p (f t)
-    go (EVariadicSpread p t e) = EVariadicSpread p (f t) (go e)
-    go (EApplication p t fn args) = EApplication p (f t) (go fn) (map go args)
-    go (EMatch p t scrut arms) = EMatch p (f t) (go scrut) (map goArm arms)
+    go (EVar a@ExprAnn{ty = t} i)            = EVar a{ty = f t} i
+    go (EUnitLit a)                           = EUnitLit a
+    go (EIntLit a@ExprAnn{ty = t} lit)        = EIntLit a{ty = f t} lit
+    go (EFloatLit a@ExprAnn{ty = t} lit)      = EFloatLit a{ty = f t} lit
+    go (EStrLit a@ExprAnn{ty = t} lit)        = EStrLit a{ty = f t} lit
+    go (EInfixOp a@ExprAnn{ty = t} e1 op e2) = EInfixOp a{ty = f t} (go e1) op (go e2)
+    go (EIf a@ExprAnn{ty = t} c th el)       = EIf a{ty = f t} (go c) (go th) (go el)
+    go (ESequence a@ExprAnn{ty = t} es)       = ESequence a{ty = f t} (map go es)
+    go (ELambda a@ExprAnn{ty = t} (Binding params retTy body)) =
+      ELambda a{ty = f t} (Binding (map goParam params) (f retTy) (go body))
+    go (ELet a@ExprAnn{ty = t} name (Binding params retTy rhs) mInE) =
+      ELet a{ty = f t} name (Binding (map goParam params) (f retTy) (go rhs)) (fmap go mInE)
+    go (EIndex a@ExprAnn{ty = t} e idx)       = EIndex a{ty = f t} (go e) (go idx)
+    go (ESliceLit a@ExprAnn{ty = t} es)       = ESliceLit a{ty = f t} (map go es)
+    go (EMapLit a@ExprAnn{ty = t})            = EMapLit a{ty = f t}
+    go (EVariadicSpread a@ExprAnn{ty = t} e)  = EVariadicSpread a{ty = f t} (go e)
+    go (EApplication a@ExprAnn{ty = t} fn args) = EApplication a{ty = f t} (go fn) (map go args)
+    go (EMatch a@ExprAnn{ty = t} scrut arms)  = EMatch a{ty = f t} (go scrut) (map goArm arms)
 
     goArm (MatchArm armPos pat body)  = MatchArm armPos pat (go body)
 
     goParam PUnit              = PUnit
-    goParam (PTyped name ty)   = PTyped name (f ty)
-    goParam (PVariadic name ty) = PVariadic name (f ty)
+    goParam (PTyped name t)    = PTyped name (f t)
+    goParam (PVariadic name t) = PVariadic name (f t)
 
 -- ---------------------------------------------------------------------------
 -- Functions built on the combinators
@@ -562,9 +564,9 @@ applySubstExpr s = mapExprTypes (applySubst s)
 collectLiteralDefaults :: Expr -> Subst
 collectLiteralDefaults = foldMapExpr collectNode
   where
-    collectNode (EIntLit _ (TConstrained n TSInt) _)      = Map.singleton n (TNamed (Ident "int"))
-    collectNode (EFloatLit _ (TConstrained n TSFloat) _) = Map.singleton n (TNamed (Ident "float64"))
-    collectNode _                                        = Map.empty
+    collectNode (EIntLit ExprAnn{ty = TConstrained n TSInt} _)    = Map.singleton n (TNamed (Ident "int"))
+    collectNode (EFloatLit ExprAnn{ty = TConstrained n TSFloat} _) = Map.singleton n (TNamed (Ident "float64"))
+    collectNode _                                                  = Map.empty
 
 -- Default remaining TVars to opaque, but only in targeted positions:
 -- 1. Standalone TVars on expression nodes (e.g. from tuple pattern bindings
@@ -608,14 +610,14 @@ defaultRemainingTVars = foldMapExpr defaultNode
 
 -- Collect all remaining TVars in an Expr tree as errors.
 checkNoTVars :: Expr -> [InferError]
-checkNoTVars = foldMapExpr (\e -> let pos = exprPos e in concatMap (collectTVars pos) (exprTypes e))
+checkNoTVars = foldMapExpr (\e -> let p = exprPos e in concatMap (collectTVars p) (exprTypes e))
   where
-    collectTVars pos (TVar _)          = [CannotInferType pos]
-    collectTVars pos (TConstrained _ _) = [CannotInferType pos]
-    collectTVars pos (TSlice t)        = collectTVars pos t
-    collectTVars pos (TMap k v)        = collectTVars pos k ++ collectTVars pos v
-    collectTVars pos (TFunc ps mVar ret) =
-      concatMap (collectTVars pos) ps ++ maybe [] (collectTVars pos) mVar ++ collectTVars pos ret
+    collectTVars p (TVar _)          = [CannotInferType p]
+    collectTVars p (TConstrained _ _) = [CannotInferType p]
+    collectTVars p (TSlice t)        = collectTVars p t
+    collectTVars p (TMap k v)        = collectTVars p k ++ collectTVars p v
+    collectTVars p (TFunc ps mVar ret) =
+      concatMap (collectTVars p) ps ++ maybe [] (collectTVars p) mVar ++ collectTVars p ret
     collectTVars _ (TNamed _)          = []
 
 
@@ -630,20 +632,86 @@ maxTVarExpr = getMax . foldMapExpr (\e -> Max (maximum (0 : map maxTy (exprTypes
     maxTy (TFunc ps mVar ret) = maximum (0 : map maxTy ps ++ maybe [] (\v -> [maxTy v]) mVar ++ [maxTy ret])
     maxTy (TNamed _) = 0
 
--- Main entry: infer types for a top-level expression, apply substitution, default literals.
+-- Post-order traversal: mark each node's isStmt based on whether it or any
+-- child can standalone as go statement. EApplication and ELet are inherently
+-- statement-valid; all other nodes are statement-valid if any child is.
+computeIsStmt :: Expr -> Expr
+computeIsStmt = mark
+  where
+    mark (EApplication a f args) =
+      let f' = mark f; args' = map mark args
+      in EApplication a{isStmt = True} f' args'
+    mark (ELet a name (Binding ps retTy rhs) mtin) =
+      let rhs' = mark rhs; mtin' = fmap mark mtin
+      in ELet a{isStmt = True} name (Binding ps retTy rhs') mtin'
+    mark (EIf a c th el) =
+      let c' = mark c; th' = mark th; el' = mark el
+          s = isStmt (exprAnn c') || isStmt (exprAnn th') || isStmt (exprAnn el')
+      in EIf a{isStmt = s} c' th' el'
+    mark (EMatch a scrut arms) =
+      let scrut' = mark scrut
+          arms' = map markArm arms
+          s = isStmt (exprAnn scrut') || any (\(MatchArm _ _ body) -> isStmt (exprAnn body)) arms'
+      in EMatch a{isStmt = s} scrut' arms'
+    mark (ESequence a es) =
+      let es' = map mark es
+          s = any (isStmt . exprAnn) es'
+      in ESequence a{isStmt = s} es'
+    mark (EInfixOp a e1 op e2) =
+      let e1' = mark e1; e2' = mark e2
+          s = isStmt (exprAnn e1') || isStmt (exprAnn e2')
+      in EInfixOp a{isStmt = s} e1' op e2'
+    mark (ELambda a (Binding ps retTy body)) =
+      let body' = mark body
+      in ELambda a (Binding ps retTy body')
+    mark (EIndex a e idx) =
+      let e' = mark e; idx' = mark idx
+          s = isStmt (exprAnn e') || isStmt (exprAnn idx')
+      in EIndex a{isStmt = s} e' idx'
+    mark (ESliceLit a es) =
+      let es' = map mark es
+          s = any (isStmt . exprAnn) es'
+      in ESliceLit a{isStmt = s} es'
+    mark (EVariadicSpread a e) =
+      let e' = mark e
+      in EVariadicSpread a{isStmt = isStmt (exprAnn e')} e'
+    mark e@(EVar _ _) = e
+    mark e@(EIntLit _ _) = e
+    mark e@(EFloatLit _ _) = e
+    mark e@(EStrLit _ _) = e
+    mark e@(EUnitLit _) = e
+    mark e@(EMapLit _) = e
+
+    markArm (MatchArm p pat body) = MatchArm p pat (mark body)
+
+-- Main entry: runs the full inference pipeline on a parsed Expr tree.
+--
+--   1. Infer types (constraint generation + unification)
+--   2. Apply substitution to resolve TVars
+--   3. Default literal types (int literals → int, float literals → float64)
+--   4. Default remaining TVars in collection positions to opaque
+--   5. Reject any unresolved TVars as errors
+--   6. Compute isStmt annotations for codegen
 inferAndResolve :: Expr -> Either [InferError] Expr
 inferAndResolve expr = do
-  let initState = InferState Map.empty (maxTVarExpr expr + 1)
-  (typedExpr, finalState) <- first (:[]) $ runStateT (inferExpr preludeEnv expr) initState
-  let resolved = applySubstExpr (inferSubst finalState) typedExpr
-  -- Pass 1: collect defaults from literal nodes
-  let defaults = collectLiteralDefaults resolved
-  -- Apply defaults as an additional substitution pass
-  let defaulted = applySubstExpr defaults resolved
-  -- Pass 2: default remaining TVars to opaque
-  let collectionDefaults = defaultRemainingTVars defaulted
-  let final = applySubstExpr collectionDefaults defaulted
-  -- Pass 3: check no TVars remain
-  case checkNoTVars final of
-    [] -> Right final
+  let initState = InferState { inferSubst = Map.empty, inferNextId = maxTVarExpr expr + 1 }
+
+  -- Step 1: infer
+  (inferred, finalState) <- first (:[]) $ runStateT (inferExpr preludeEnv expr) initState
+
+  -- Step 2: apply substitution
+  let resolved = applySubstExpr (inferSubst finalState) inferred
+
+  -- Step 3: default literal types
+  let afterLiteralDefaults = applySubstExpr (collectLiteralDefaults resolved) resolved
+
+  -- Step 4: default remaining TVars in collections to opaque
+  let afterCollectionDefaults = applySubstExpr (defaultRemainingTVars afterLiteralDefaults) afterLiteralDefaults
+
+  -- Step 5: reject unresolved TVars
+  case checkNoTVars afterCollectionDefaults of
+    [] -> pure ()
     errs -> Left errs
+
+  -- Step 6: compute statement annotations
+  Right (computeIsStmt afterCollectionDefaults)

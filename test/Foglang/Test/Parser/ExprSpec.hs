@@ -2,100 +2,96 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
-import Foglang.AST (Binding (..), Expr (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
+import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
 import Foglang.Parser (SC(..), scn)
 import Foglang.Parser.Expr (sequence')
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, runParserT)
-import Text.Megaparsec.Pos (SourcePos, initialPos, mkPos)
+import Text.Megaparsec.Pos (initialPos, mkPos)
 
--- Dummy source position for test expected values.
-p :: SourcePos
-p = initialPos ""
-
--- Placeholder type used in expected values (matches what stripPos normalizes to).
-u :: TypeExpr
-u = TNamed (Ident "unresolved")
+-- Dummy annotation for test expected values (matches what stripPos normalizes to).
+a :: ExprAnn
+a = ExprAnn { pos = initialPos "", ty = TNamed (Ident "unresolved"), isStmt = False }
 
 -- Strip all source positions and types from an Expr tree to enable structural
 -- comparison without caring about exact positions or placeholder types.
 stripPos :: Expr -> Expr
-stripPos (EVar _ _ i) = EVar p u i
-stripPos (EIntLit _ _ lit) = EIntLit p u lit
-stripPos (EFloatLit _ _ lit) = EFloatLit p u lit
-stripPos (EStrLit _ _ lit) = EStrLit p u lit
-stripPos (EUnitLit _) = EUnitLit p
-stripPos (ELet _ _ name (Binding ps ty rhs) mInExpr) =
-  ELet p u name (Binding (map stripParam ps) (stripType ty) (stripPos rhs)) (fmap stripPos mInExpr)
-stripPos (ELambda _ _ (Binding ps ty body)) =
-  ELambda p u (Binding (map stripParam ps) (stripType ty) (stripPos body))
-stripPos (EIf _ _ cond then' else') =
-  EIf p u (stripPos cond) (stripPos then') (stripPos else')
-stripPos (EInfixOp _ _ e1 op e2) =
-  EInfixOp p u (stripPos e1) op (stripPos e2)
-stripPos (EApplication _ _ f args) =
-  EApplication p u (stripPos f) (map stripPos args)
-stripPos (EIndex _ _ e idx) =
-  EIndex p u (stripPos e) (stripPos idx)
-stripPos (ESliceLit _ _ exprs) =
-  ESliceLit p u (map stripPos exprs)
-stripPos (EMapLit _ _) = EMapLit p u
-stripPos (ESequence _ _ exprs) =
-  ESequence p u (map stripPos exprs)
-stripPos (EVariadicSpread _ _ e) =
-  EVariadicSpread p u (stripPos e)
-stripPos (EMatch _ _ scrut arms) =
-  EMatch p u (stripPos scrut) (map stripArmPos arms)
+stripPos (EVar _ i) = EVar a i
+stripPos (EIntLit _ lit) = EIntLit a lit
+stripPos (EFloatLit _ lit) = EFloatLit a lit
+stripPos (EStrLit _ lit) = EStrLit a lit
+stripPos (EUnitLit _) = EUnitLit a
+stripPos (ELet _ name (Binding ps t rhs) mInExpr) =
+  ELet a name (Binding (map stripParam ps) (stripType t) (stripPos rhs)) (fmap stripPos mInExpr)
+stripPos (ELambda _ (Binding ps t body)) =
+  ELambda a (Binding (map stripParam ps) (stripType t) (stripPos body))
+stripPos (EIf _ cond then' else') =
+  EIf a (stripPos cond) (stripPos then') (stripPos else')
+stripPos (EInfixOp _ e1 op e2) =
+  EInfixOp a (stripPos e1) op (stripPos e2)
+stripPos (EApplication _ f args) =
+  EApplication a (stripPos f) (map stripPos args)
+stripPos (EIndex _ e idx) =
+  EIndex a (stripPos e) (stripPos idx)
+stripPos (ESliceLit _ exprs) =
+  ESliceLit a (map stripPos exprs)
+stripPos (EMapLit _) = EMapLit a
+stripPos (ESequence _ exprs) =
+  ESequence a (map stripPos exprs)
+stripPos (EVariadicSpread _ e) =
+  EVariadicSpread a (stripPos e)
+stripPos (EMatch _ scrut arms) =
+  EMatch a (stripPos scrut) (map stripArmPos arms)
 
--- Normalize TypeExpr: replace TVars with the placeholder u.
+-- Normalize TypeExpr: replace TVars with the placeholder.
 stripType :: TypeExpr -> TypeExpr
-stripType (TVar _) = u
-stripType (TConstrained _ _) = u
+stripType (TVar _) = ty a
+stripType (TConstrained _ _) = ty a
 stripType (TSlice t) = TSlice (stripType t)
 stripType (TMap k v) = TMap (stripType k) (stripType v)
 stripType (TFunc ps mv r) = TFunc (map stripType ps) (fmap stripType mv) (stripType r)
 stripType t = t
 
--- Normalize params: replace TVars in param types with placeholder u.
+-- Normalize params: replace TVars in param types with placeholder.
 stripParam :: Param -> Param
 stripParam PUnit = PUnit
 stripParam (PTyped n t) = PTyped n (stripType t)
 stripParam (PVariadic n t) = PVariadic n (stripType t)
 
 stripArmPos :: MatchArm -> MatchArm
-stripArmPos (MatchArm _ pat body) = MatchArm p pat (stripPos body)
+stripArmPos (MatchArm _ pat body) = MatchArm (pos a) pat (stripPos body)
 
 spec :: Spec
 spec = do
   let validELet =
-        [ ("let x : int = 1", ELet p u "x" (Binding [] (TNamed "int") (EIntLit p u (IntDecimal "1"))) Nothing),
-          ("let x:int=2", ELet p u "x" (Binding [] (TNamed "int") (EIntLit p u (IntDecimal "2"))) Nothing),
+        [ ("let x : int = 1", ELet a "x" (Binding [] (TNamed "int") (EIntLit a (IntDecimal "1"))) Nothing),
+          ("let x:int=2", ELet a "x" (Binding [] (TNamed "int") (EIntLit a (IntDecimal "2"))) Nothing),
           ( "let f (x : int) => int = x",
-            ELet p u "f" (Binding [PTyped "x" (TNamed "int")] (TNamed "int") (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (TNamed "int")] (TNamed "int") (EVar a "x")) Nothing
           ),
           ( "let f (x : int) -> (y : int) => int = x",
-            ELet p u "f" (Binding [PTyped "x" (TNamed "int"), PTyped "y" (TNamed "int")] (TNamed "int") (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (TNamed "int"), PTyped "y" (TNamed "int")] (TNamed "int") (EVar a "x")) Nothing
           ),
           ( "let f () => unit = x",
-            ELet p u "f" (Binding [PUnit] (TNamed "unit") (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PUnit] (TNamed "unit") (EVar a "x")) Nothing
           ),
           -- Untyped value binding (inferred type)
-          ("let x = 1", ELet p u "x" (Binding [] u (EIntLit p u (IntDecimal "1"))) Nothing),
+          ("let x = 1", ELet a "x" (Binding [] (ty a) (EIntLit a (IntDecimal "1"))) Nothing),
           -- Bare identifier params (inferred types)
           ( "let f x y = x",
-            ELet p u "f" (Binding [PTyped "x" u, PTyped "y" u] u (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (ty a) (EVar a "x")) Nothing
           ),
           -- Parenthesized untyped params
           ( "let f (x) (y) = x",
-            ELet p u "f" (Binding [PTyped "x" u, PTyped "y" u] u (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (ty a) (EVar a "x")) Nothing
           ),
           -- Mixed bare and annotated params
           ( "let f x (y : int) = x",
-            ELet p u "f" (Binding [PTyped "x" u, PTyped "y" (TNamed "int")] u (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (TNamed "int")] (ty a) (EVar a "x")) Nothing
           ),
           -- Bare params with explicit return type
           ( "let f x y => int = x",
-            ELet p u "f" (Binding [PTyped "x" u, PTyped "y" u] (TNamed "int") (EVar p u "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (TNamed "int") (EVar a "x")) Nothing
           )
         ]
 
@@ -106,38 +102,38 @@ spec = do
         ]
 
   let validEInfixOp =
-        [ ("1 + 2", EInfixOp p u (EIntLit p u (IntDecimal "1")) "+" (EIntLit p u (IntDecimal "2"))),
-          ("3.14 * 2.0", EInfixOp p u (EFloatLit p u (FloatDecimal "3.14")) "*" (EFloatLit p u (FloatDecimal "2.0"))),
-          ("x - y", EInfixOp p u (EVar p u "x") "-" (EVar p u "y")),
+        [ ("1 + 2", EInfixOp a (EIntLit a (IntDecimal "1")) "+" (EIntLit a (IntDecimal "2"))),
+          ("3.14 * 2.0", EInfixOp a (EFloatLit a (FloatDecimal "3.14")) "*" (EFloatLit a (FloatDecimal "2.0"))),
+          ("x - y", EInfixOp a (EVar a "x") "-" (EVar a "y")),
           ( "1 + 2 * 3",
-            EInfixOp p u
-              (EIntLit p u (IntDecimal "1"))
+            EInfixOp a
+              (EIntLit a (IntDecimal "1"))
               "+"
-              (EInfixOp p u (EIntLit p u (IntDecimal "2")) "*" (EIntLit p u (IntDecimal "3")))
+              (EInfixOp a (EIntLit a (IntDecimal "2")) "*" (EIntLit a (IntDecimal "3")))
           ),
-          ("a / b", EInfixOp p u (EVar p u "a") "/" (EVar p u "b")),
-          ("a % b", EInfixOp p u (EVar p u "a") "%" (EVar p u "b")),
-          ("a <<< b", EInfixOp p u (EVar p u "a") "<<<" (EVar p u "b")),
-          ("a >>> b", EInfixOp p u (EVar p u "a") ">>>" (EVar p u "b")),
-          ("a &&& b", EInfixOp p u (EVar p u "a") "&&&" (EVar p u "b")),
-          ("a ||| b", EInfixOp p u (EVar p u "a") "|||" (EVar p u "b")),
-          ("a ^^^ b", EInfixOp p u (EVar p u "a") "^^^" (EVar p u "b")),
-          ("a == b", EInfixOp p u (EVar p u "a") "==" (EVar p u "b")),
-          ("a != b", EInfixOp p u (EVar p u "a") "!=" (EVar p u "b")),
-          ("a < b", EInfixOp p u (EVar p u "a") "<" (EVar p u "b")),
-          ("a > b", EInfixOp p u (EVar p u "a") ">" (EVar p u "b")),
-          ("a <= b", EInfixOp p u (EVar p u "a") "<=" (EVar p u "b")),
-          ("a >= b", EInfixOp p u (EVar p u "a") ">=" (EVar p u "b")),
-          ("a && b", EInfixOp p u (EVar p u "a") "&&" (EVar p u "b")),
-          ("a || b", EInfixOp p u (EVar p u "a") "||" (EVar p u "b")),
+          ("a / b", EInfixOp a (EVar a "a") "/" (EVar a "b")),
+          ("a % b", EInfixOp a (EVar a "a") "%" (EVar a "b")),
+          ("a <<< b", EInfixOp a (EVar a "a") "<<<" (EVar a "b")),
+          ("a >>> b", EInfixOp a (EVar a "a") ">>>" (EVar a "b")),
+          ("a &&& b", EInfixOp a (EVar a "a") "&&&" (EVar a "b")),
+          ("a ||| b", EInfixOp a (EVar a "a") "|||" (EVar a "b")),
+          ("a ^^^ b", EInfixOp a (EVar a "a") "^^^" (EVar a "b")),
+          ("a == b", EInfixOp a (EVar a "a") "==" (EVar a "b")),
+          ("a != b", EInfixOp a (EVar a "a") "!=" (EVar a "b")),
+          ("a < b", EInfixOp a (EVar a "a") "<" (EVar a "b")),
+          ("a > b", EInfixOp a (EVar a "a") ">" (EVar a "b")),
+          ("a <= b", EInfixOp a (EVar a "a") "<=" (EVar a "b")),
+          ("a >= b", EInfixOp a (EVar a "a") ">=" (EVar a "b")),
+          ("a && b", EInfixOp a (EVar a "a") "&&" (EVar a "b")),
+          ("a || b", EInfixOp a (EVar a "a") "||" (EVar a "b")),
           -- &&& (prec 5) tighter than && (prec 2)
-          ("a &&& b && c", EInfixOp p u (EInfixOp p u (EVar p u "a") "&&&" (EVar p u "b")) "&&" (EVar p u "c")),
+          ("a &&& b && c", EInfixOp a (EInfixOp a (EVar a "a") "&&&" (EVar a "b")) "&&" (EVar a "c")),
           -- ||| (prec 4) tighter than && (prec 2)
-          ("a ||| b && c", EInfixOp p u (EInfixOp p u (EVar p u "a") "|||" (EVar p u "b")) "&&" (EVar p u "c")),
+          ("a ||| b && c", EInfixOp a (EInfixOp a (EVar a "a") "|||" (EVar a "b")) "&&" (EVar a "c")),
           -- == (prec 3) tighter than && (prec 2)
-          ("a == b && c", EInfixOp p u (EInfixOp p u (EVar p u "a") "==" (EVar p u "b")) "&&" (EVar p u "c")),
+          ("a == b && c", EInfixOp a (EInfixOp a (EVar a "a") "==" (EVar a "b")) "&&" (EVar a "c")),
           -- && (prec 2) tighter than || (prec 1)
-          ("a && b || c", EInfixOp p u (EInfixOp p u (EVar p u "a") "&&" (EVar p u "b")) "||" (EVar p u "c"))
+          ("a && b || c", EInfixOp a (EInfixOp a (EVar a "a") "&&" (EVar a "b")) "||" (EVar a "c"))
         ]
 
   let invalidEInfixOp =
@@ -150,16 +146,16 @@ spec = do
 
   let validEIf =
         [ ( "if x then 1 else 2",
-            EIf p u (EVar p u "x") (EIntLit p u (IntDecimal "1")) (EIntLit p u (IntDecimal "2"))
+            EIf a (EVar a "x") (EIntLit a (IntDecimal "1")) (EIntLit a (IntDecimal "2"))
           ),
           ( "if x then y else z",
-            EIf p u (EVar p u "x") (EVar p u "y") (EVar p u "z")
+            EIf a (EVar a "x") (EVar a "y") (EVar a "z")
           ),
           ( "if x then 1 else 2 + 3",
-            EIf p u
-              (EVar p u "x")
-              (EIntLit p u (IntDecimal "1"))
-              (EInfixOp p u (EIntLit p u (IntDecimal "2")) "+" (EIntLit p u (IntDecimal "3")))
+            EIf a
+              (EVar a "x")
+              (EIntLit a (IntDecimal "1"))
+              (EInfixOp a (EIntLit a (IntDecimal "2")) "+" (EIntLit a (IntDecimal "3")))
           )
         ]
 
@@ -172,13 +168,13 @@ spec = do
         ]
 
   let validParen =
-        [ ("(1)", EIntLit p u (IntDecimal "1")),
-          ("(x)", EVar p u "x"),
+        [ ("(1)", EIntLit a (IntDecimal "1")),
+          ("(x)", EVar a "x"),
           ( "(1 + 2) * 3",
-            EInfixOp p u
-              (EInfixOp p u (EIntLit p u (IntDecimal "1")) "+" (EIntLit p u (IntDecimal "2")))
+            EInfixOp a
+              (EInfixOp a (EIntLit a (IntDecimal "1")) "+" (EIntLit a (IntDecimal "2")))
               "*"
-              (EIntLit p u (IntDecimal "3"))
+              (EIntLit a (IntDecimal "3"))
           )
         ]
 
@@ -188,31 +184,31 @@ spec = do
         ]
 
   let validEApplication =
-        [ ("f x", EApplication p u (EVar p u "f") [EVar p u "x"]),
-          ("f x y", EApplication p u (EVar p u "f") [EVar p u "x", EVar p u "y"]),
-          ("f 1 2", EApplication p u (EVar p u "f") [EIntLit p u (IntDecimal "1"), EIntLit p u (IntDecimal "2")]),
+        [ ("f x", EApplication a (EVar a "f") [EVar a "x"]),
+          ("f x y", EApplication a (EVar a "f") [EVar a "x", EVar a "y"]),
+          ("f 1 2", EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2")]),
           ( "f (x + 1)",
-            EApplication p u (EVar p u "f") [EInfixOp p u (EVar p u "x") "+" (EIntLit p u (IntDecimal "1"))]
+            EApplication a (EVar a "f") [EInfixOp a (EVar a "x") "+" (EIntLit a (IntDecimal "1"))]
           ),
           ( "f x + y",
-            EInfixOp p u (EApplication p u (EVar p u "f") [EVar p u "x"]) "+" (EVar p u "y")
+            EInfixOp a (EApplication a (EVar a "f") [EVar a "x"]) "+" (EVar a "y")
           ),
           -- if/func/match are now valid argument atoms (line fold disambiguates)
           ( "f if x then 1 else 2",
-            EApplication p u (EVar p u "f") [EIf p u (EVar p u "x") (EIntLit p u (IntDecimal "1")) (EIntLit p u (IntDecimal "2"))]
+            EApplication a (EVar a "f") [EIf a (EVar a "x") (EIntLit a (IntDecimal "1")) (EIntLit a (IntDecimal "2"))]
           )
         ]
 
   -- Lambda expressions with untyped/bare params
   let validELambda =
         [ ( "func (x) = x",
-            ELambda p u (Binding [PTyped "x" u] u (EVar p u "x"))
+            ELambda a (Binding [PTyped "x" (ty a)] (ty a) (EVar a "x"))
           ),
           ( "func x = x",
-            ELambda p u (Binding [PTyped "x" u] u (EVar p u "x"))
+            ELambda a (Binding [PTyped "x" (ty a)] (ty a) (EVar a "x"))
           ),
           ( "func x y = x",
-            ELambda p u (Binding [PTyped "x" u, PTyped "y" u] u (EVar p u "x"))
+            ELambda a (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (ty a) (EVar a "x"))
           )
         ]
 

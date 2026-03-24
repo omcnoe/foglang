@@ -6,6 +6,7 @@ module Foglang.AST
     TypeSet (..),
     TypeExpr (..),
     pattern UnitType,
+    ExprAnn (..),
     Param (..),
     Binding (..),
     Expr (..),
@@ -16,6 +17,7 @@ module Foglang.AST
     ImportDecl (..),
     Header (..),
     FogFile (..),
+    exprAnn,
     exprPos,
     exprType,
     exprTypes,
@@ -75,8 +77,8 @@ data Param
 
 paramType :: Param -> TypeExpr
 paramType PUnit = UnitType
-paramType (PTyped _ ty) = ty
-paramType (PVariadic _ ty) = ty
+paramType (PTyped _ t) = t
+paramType (PVariadic _ t) = t
 
 -- The common shape of a let-binding and a lambda.
 -- params ([] = value, [...] = function), value/function return type, and rhs.
@@ -94,77 +96,74 @@ bindingType ps retTy = TFunc fixedTys mVarTy retTy
   where
     fixedTys = [paramType p | p <- ps, not (isVariadic p)]
     mVarTy = case reverse ps of
-      (PVariadic _ ty : _) -> Just ty
+      (PVariadic _ t : _) -> Just t
       _ -> Nothing
     isVariadic (PVariadic {}) = True
     isVariadic _ = False
 
--- AST for expressions. Every constructor carries a SourcePos and a TypeExpr.
+-- Annotation carried by every Expr node. The parser populates pos and ty
+-- (with TVars for unknown types); inference resolves ty; a post-inference
+-- pass computes isStmt.
+data ExprAnn = ExprAnn
+  { pos    :: SourcePos
+  , ty     :: TypeExpr
+  , isStmt :: Bool
+  } deriving (Eq, Show)
+
+-- AST for expressions. Every constructor carries an ExprAnn.
 -- The parser fills in placeholder types; inference resolves them.
--- EUnitLit has no TypeExpr field because its type is always TNamed "()" .
 data Expr
-  = EVar SourcePos TypeExpr Ident
-  | EIntLit SourcePos TypeExpr IntLit
-  | EFloatLit SourcePos TypeExpr FloatLit
-  | EStrLit SourcePos TypeExpr StringLit
-  | EUnitLit SourcePos -- the () literal; not a function call, just the unit value
-  | ELet SourcePos TypeExpr Ident Binding (Maybe Expr) -- type, name, binding, optional continuation
-  | ELambda SourcePos TypeExpr Binding -- TFunc of the lambda
-  | EIf SourcePos TypeExpr Expr Expr Expr
-  | EInfixOp SourcePos TypeExpr Expr T.Text Expr
-  | EApplication SourcePos TypeExpr Expr [Expr] -- result type of the application
-  | EIndex SourcePos TypeExpr Expr Expr -- expr[expr] — slice/map indexing
-  | ESliceLit SourcePos TypeExpr [Expr] -- slice literal
-  | EMapLit SourcePos TypeExpr -- empty map literal
-  | ESequence SourcePos TypeExpr [Expr]
-  | EVariadicSpread SourcePos TypeExpr Expr -- expr... unpacks []T into a variadic slot at a call site
-  | EMatch SourcePos TypeExpr Expr [MatchArm] -- match expression
+  = EVar ExprAnn Ident
+  | EIntLit ExprAnn IntLit
+  | EFloatLit ExprAnn FloatLit
+  | EStrLit ExprAnn StringLit
+  | EUnitLit ExprAnn
+  | ELet ExprAnn Ident Binding (Maybe Expr) -- name, binding, optional continuation
+  | ELambda ExprAnn Binding -- TFunc of the lambda
+  | EIf ExprAnn Expr Expr Expr
+  | EInfixOp ExprAnn Expr T.Text Expr
+  | EApplication ExprAnn Expr [Expr] -- result type of the application
+  | EIndex ExprAnn Expr Expr -- expr[expr] — slice/map indexing
+  | ESliceLit ExprAnn [Expr] -- slice literal
+  | EMapLit ExprAnn -- empty map literal
+  | ESequence ExprAnn [Expr]
+  | EVariadicSpread ExprAnn Expr -- expr... unpacks []T into a variadic slot at a call site
+  | EMatch ExprAnn Expr [MatchArm] -- match expression
   deriving (Eq, Show)
+
+-- Extract the ExprAnn from any Expr node.
+exprAnn :: Expr -> ExprAnn
+exprAnn (EVar a _) = a
+exprAnn (EIntLit a _) = a
+exprAnn (EFloatLit a _) = a
+exprAnn (EStrLit a _) = a
+exprAnn (EUnitLit a) = a
+exprAnn (ELet a _ _ _) = a
+exprAnn (ELambda a _) = a
+exprAnn (EIf a _ _ _) = a
+exprAnn (EInfixOp a _ _ _) = a
+exprAnn (EApplication a _ _) = a
+exprAnn (EIndex a _ _) = a
+exprAnn (ESliceLit a _) = a
+exprAnn (EMapLit a) = a
+exprAnn (ESequence a _) = a
+exprAnn (EVariadicSpread a _) = a
+exprAnn (EMatch a _ _) = a
 
 -- Extract the SourcePos from any Expr node.
 exprPos :: Expr -> SourcePos
-exprPos (EVar p _ _) = p
-exprPos (EIntLit p _ _) = p
-exprPos (EFloatLit p _ _) = p
-exprPos (EStrLit p _ _) = p
-exprPos (EUnitLit p) = p
-exprPos (ELet p _ _ _ _) = p
-exprPos (ELambda p _ _) = p
-exprPos (EIf p _ _ _ _) = p
-exprPos (EInfixOp p _ _ _ _) = p
-exprPos (EApplication p _ _ _) = p
-exprPos (EIndex p _ _ _) = p
-exprPos (ESliceLit p _ _) = p
-exprPos (EMapLit p _) = p
-exprPos (ESequence p _ _) = p
-exprPos (EVariadicSpread p _ _) = p
-exprPos (EMatch p _ _ _) = p
+exprPos = pos . exprAnn
 
 -- The type of the Expr node itself.
 exprType :: Expr -> TypeExpr
-exprType (EVar _ t _) = t
-exprType (EIntLit _ t _) = t
-exprType (EFloatLit _ t _) = t
-exprType (EStrLit _ t _) = t
-exprType (EUnitLit _) = UnitType
-exprType (ELet _ t _ _ _) = t
-exprType (ELambda _ t _) = t
-exprType (EIf _ t _ _ _) = t
-exprType (EInfixOp _ t _ _ _) = t
-exprType (EApplication _ t _ _) = t
-exprType (EIndex _ t _ _) = t
-exprType (ESliceLit _ t _) = t
-exprType (EMapLit _ t) = t
-exprType (ESequence _ t _) = t
-exprType (EVariadicSpread _ t _) = t
-exprType (EMatch _ t _ _) = t
+exprType = ty . exprAnn
 
 -- All TypeExprs directly attached to this node: the node's own type plus
 -- any types embedded in Binding/Lambda (param types and return type).
 -- Does not include types from child Expr nodes.
 exprTypes :: Expr -> [TypeExpr]
-exprTypes (ELambda _ t (Binding params retTy _)) = t : retTy : map paramType params
-exprTypes (ELet _ t _ (Binding params retTy _) _) = t : retTy : map paramType params
+exprTypes (ELambda ExprAnn{ty = t} (Binding params retTy _)) = t : retTy : map paramType params
+exprTypes (ELet ExprAnn{ty = t} _ (Binding params retTy _) _) = t : retTy : map paramType params
 exprTypes expr = [exprType expr]
 
 data MatchArm = MatchArm SourcePos Pattern Expr

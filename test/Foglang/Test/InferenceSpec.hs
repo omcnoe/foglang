@@ -37,7 +37,7 @@ inferLetBindingType s = case parseExpr s of
   Right expr -> do
     resolved <- inferAndResolve expr
     case resolved of
-      ELet _ _ _ (Binding params retTy _) _ -> Right (bindingType params retTy)
+      ELet _ _ (Binding params retTy _) _ -> Right (bindingType params retTy)
       _ -> error "expected ELet"
 
 -- Helper to check error constructor

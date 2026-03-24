@@ -46,6 +46,7 @@ library
   hs-source-dirs:
       src
   default-extensions:
+      DuplicateRecordFields
       ImportQualifiedPost
       OverloadedStrings
       PatternSynonyms

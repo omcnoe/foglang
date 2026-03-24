@@ -3,7 +3,7 @@ module Foglang.Parser.Expr (sequence') where
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), Ident (..), MatchArm (..), TypeExpr (..), TypeSet (..), exprPos)
+import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), TypeSet (..), pattern UnitType, exprPos)
 import Foglang.Parser (Parser, SC(..), freshConstrained, freshTVar, keyword, lexeme, symbol, scn, LineIndent(..), unLineIndent)
 import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard)
 import Foglang.Parser.Patterns (pattern')
@@ -28,11 +28,11 @@ indentedScn (Just li) = SC $ indentGuard (runSC scn) GT (unLineIndent li) *> pur
 -- introducing keyword, used to detect mid-line expressions.
 sequence' :: Maybe LineIndent -> Pos -> Parser Expr
 sequence' parentLi startLine = do
-  pos <- getSourcePos
+  p <- getSourcePos
   case parentLi of
     Nothing -> pure ()
     Just li -> do
-      let col = sourceColumn pos
+      let col = sourceColumn p
       when (col <= unLineIndent li) $ incorrectIndent GT (unLineIndent li) col
   e <- sequenceItem parentLi startLine
   es <- many $ try $ do
@@ -42,7 +42,7 @@ sequence' parentLi startLine = do
     [x] -> return x
     xs -> do
       t <- freshTVar
-      return $ ESequence pos t xs
+      return $ ESequence ExprAnn { pos = p, ty = t, isStmt = False } xs
 
 -- A sequence item is either:
 -- a let binding (which absorbs any subsequent expressions as its in-expression)
@@ -53,12 +53,12 @@ sequence' parentLi startLine = do
 -- start line (mid-line), inherit the parent's column.
 sequenceItem :: Maybe LineIndent -> Pos -> Parser Expr
 sequenceItem parentLi startLine = do
-  pos <- getSourcePos
-  let col = sourceColumn pos
+  p <- getSourcePos
+  let col = sourceColumn p
       foldCol
-        | sourceLine pos > startLine = LineIndent col
-        | Just li <- parentLi        = li
-        | otherwise                  = LineIndent col
+        | sourceLine p > startLine = LineIndent col
+        | Just li <- parentLi      = li
+        | otherwise                = LineIndent col
   try (letExpr parentLi foldCol) <|> lineFoldExpr foldCol
 
 -- A line folded expression: parsed as a single logical line that may span
@@ -101,8 +101,8 @@ startsWithUnambiguousInfix = do
 
 letExpr :: Maybe LineIndent -> LineIndent -> Parser Expr
 letExpr parentLi letCol = do
-  pos <- getSourcePos
-  let letLine = sourceLine pos
+  p <- getSourcePos
+  let letLine = sourceLine p
   _ <- lexeme scn (keyword "let")
   name <- lexeme scn ident
 
@@ -135,10 +135,10 @@ letExpr parentLi letCol = do
         [x] -> return (Just x)
         xs -> do
           t <- freshTVar
-          return $ Just (ESequence seqPos t xs)
+          return $ Just (ESequence ExprAnn { pos = seqPos, ty = t, isStmt = False } xs)
 
   t <- freshTVar
-  return $ ELet pos t name (Binding ps typeAnno rhs) mtin
+  return $ ELet ExprAnn { pos = p, ty = t, isStmt = True } name (Binding ps typeAnno rhs) mtin
 
 -- Core match arm parser: accepts any arm at column >= the match's line-indent.
 matchArms :: LineIndent -> Parser [MatchArm]
@@ -161,13 +161,13 @@ matchArms matchCol = do
 -- column would be too high).
 matchArmBody :: LineIndent -> Parser MatchArm
 matchArmBody matchCol = do
-  pos <- getSourcePos
-  let pipeLine = sourceLine pos
+  p <- getSourcePos
+  let pipeLine = sourceLine p
   _ <- symbol scn "|"
   pat <- pattern' scn
   _ <- symbol scn "=>"
   body <- sequence' (Just matchCol) pipeLine
-  return $ MatchArm pos pat body
+  return $ MatchArm p pat body
 
 
 -- Expression parser parameterised on a space consumer.
@@ -195,30 +195,30 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       try funcExpr
         <|> try matchExpr
         <|> try ifExpr
-        <|> try (do pos <- getSourcePos; t <- freshConstrained TSFloat; EFloatLit pos t <$> lexeme' floatLit)
-        <|> try (do pos <- getSourcePos; t <- freshConstrained TSInt; EIntLit pos t <$> lexeme' intLit)
-        <|> try (do pos <- getSourcePos; EStrLit pos (TNamed (Ident "string")) <$> lexeme' stringLit)
+        <|> try (do p <- getSourcePos; t <- freshConstrained TSFloat; EFloatLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' floatLit)
+        <|> try (do p <- getSourcePos; t <- freshConstrained TSInt; EIntLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' intLit)
+        <|> try (do p <- getSourcePos; EStrLit ExprAnn { pos = p, ty = TNamed (Ident "string"), isStmt = False } <$> lexeme' stringLit)
         <|> try sliceLit
-        <|> try (do pos <- getSourcePos; t <- freshTVar; EMapLit pos t <$ symbol' "{}")
+        <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn { pos = p, ty = t, isStmt = False } <$ symbol' "{}")
         <|> try indexableVar
-        <|> try (do pos <- getSourcePos; EUnitLit pos <$ symbol' "()")
+        <|> try (do p <- getSourcePos; EUnitLit ExprAnn { pos = p, ty = UnitType, isStmt = False } <$ symbol' "()")
         <|> indexableParen
 
     -- Parse zero or more [expr] index suffixes, then consume trailing whitespace.
     withIndexSuffix :: Expr -> Parser Expr
     withIndexSuffix base = do
-      idxs <- many (try $ do pos <- getSourcePos; t <- freshTVar; idx <- string "[" *> exprWith sc' lineIndent <* symbol' "]"; return (pos, t, idx))
+      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> exprWith sc' lineIndent <* symbol' "]"; return (p, t, idx))
       try (runSC sc') <|> pure ()
-      return $ foldl (\b (pos, t, idx) -> EIndex pos t b idx) base idxs
+      return $ foldl (\b (p, t, idx) -> EIndex ExprAnn { pos = p, ty = t, isStmt = False } b idx) base idxs
 
     -- Parse an identifier, then check for immediate [expr] index suffix.
     -- The identifier is parsed WITHOUT trailing whitespace first, so we can
     -- distinguish foo[x] (index, no space) from foo [x] (application with slice literal).
     indexableVar :: Parser Expr
     indexableVar = do
-      pos <- getSourcePos
+      p <- getSourcePos
       t <- freshTVar
-      EVar pos t <$> qualIdent >>= withIndexSuffix
+      EVar ExprAnn { pos = p, ty = t, isStmt = False } <$> qualIdent >>= withIndexSuffix
 
     indexableParen :: Parser Expr
     indexableParen = do
@@ -232,8 +232,8 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
 
     funcExpr :: Parser Expr
     funcExpr = do
-      pos <- getSourcePos
-      let funcLine = sourceLine pos
+      p <- getSourcePos
+      let funcLine = sourceLine p
       _ <- keyword' "func"
       ps <- params sc'
       -- Optional return type annotation: `=> type` or inferred
@@ -248,7 +248,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       -- (e.g. `let f = func (x) => () = ...`) scope correctly.
       body <- try (runSC scn *> sequence' (Just lineIndent) funcLine) <|> exprWith sc' lineIndent
       t <- freshTVar
-      return $ ELambda pos t (Binding ps typeAnno body)
+      return $ ELambda ExprAnn { pos = p, ty = t, isStmt = False } (Binding ps typeAnno body)
 
     -- Match expression. Scrutinee is parsed within the fold (sc').
     -- "with" is reached via scn (breaking out of fold), allowing it at
@@ -256,7 +256,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     -- at column >= lineIndent (the physical line's leading indent).
     matchExpr :: Parser Expr
     matchExpr = do
-      pos <- getSourcePos
+      p <- getSourcePos
       _ <- keyword' "match"
       scrut <- exprWith sc' lineIndent
       runSC scn
@@ -264,16 +264,16 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       runSC scn
       arms <- matchArms lineIndent
       t <- freshTVar
-      return $ EMatch pos t scrut arms
+      return $ EMatch ExprAnn { pos = p, ty = t, isStmt = False } scrut arms
 
     sliceLit :: Parser Expr
     sliceLit = do
-      pos <- getSourcePos
+      p <- getSourcePos
       _ <- symbol' "["
       exprs <- sepBy (exprWith sc' lineIndent) (symbol' ",")
       _ <- symbol' "]"
       t <- freshTVar
-      return $ ESliceLit pos t exprs
+      return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } exprs
 
     -- If/then/else: condition, then-branch, and else-branch are each Sequences
     -- with line-indent = lineIndent (the physical line's leading indent).
@@ -281,13 +281,13 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     -- to avoid the staircase problem.
     ifExpr :: Parser Expr
     ifExpr = do
-      pos <- getSourcePos
-      let ifLine = sourceLine pos
+      p <- getSourcePos
+      let ifLine = sourceLine p
       _ <- keyword' "if"
-      parseIfChain pos ifLine
+      parseIfChain p ifLine
 
     parseIfChain :: SourcePos -> Pos -> Parser Expr
-    parseIfChain pos ifLine = do
+    parseIfChain p ifLine = do
       let lineIndentPos = unLineIndent lineIndent
       cond <- sequence' (Just lineIndent) ifLine
       runSC scn
@@ -305,7 +305,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
           seqPos <- getSourcePos
           t1 <- freshTVar
           t2 <- freshTVar
-          return (EIf pos t1 cond thenBranch (ESequence seqPos t2 []))
+          return (EIf ExprAnn { pos = p, ty = t1, isStmt = False } cond thenBranch (ESequence ExprAnn { pos = seqPos, ty = t2, isStmt = False } []))
         Just _ -> do
           runSC scn
           mIf <- optional (keyword "if")
@@ -315,11 +315,11 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
               t <- freshTVar
               elseIfPos <- getSourcePos
               elseBranch <- parseIfChain elseIfPos ifLine
-              return (EIf pos t cond thenBranch elseBranch)
+              return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
             Nothing -> do
               t <- freshTVar
               elseBranch <- sequence' (Just lineIndent) ifLine
-              return (EIf pos t cond thenBranch elseBranch)
+              return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
 
     -- Parse an infix operator, ensuring it's not a prefix of a longer operator.
     -- e.g. ">" must not match the start of ">=" or ">>>".
@@ -328,7 +328,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       _ <- string op
       notFollowedBy (satisfy isOpChar)
       t <- freshTVar
-      return (\e1 e2 -> EInfixOp (exprPos e1) t e1 op e2)
+      return (\e1 e2 -> EInfixOp ExprAnn { pos = exprPos e1, ty = t, isStmt = False } e1 op e2)
 
     isOpChar :: Char -> Bool
     isOpChar c = c `elem` ("=<>&|^:!+-*/%" :: [Char])
@@ -344,9 +344,9 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       args <- some $ do
         e <- atom
         -- TODO implement variadic spread ... as real operator rather than magic logic inside the application expression
-        (do t <- freshTVar; EVariadicSpread (exprPos e) t e <$ lexeme' (string "...")) <|> pure e
+        (do t <- freshTVar; EVariadicSpread ExprAnn { pos = exprPos e, ty = t, isStmt = False } e <$ lexeme' (string "...")) <|> pure e
       t <- freshTVar
-      return (\f -> EApplication (exprPos f) t f args)
+      return (\f -> EApplication ExprAnn { pos = exprPos f, ty = t, isStmt = True } f args)
 
     operatorTable :: [[Operator Parser Expr]]
     operatorTable =
