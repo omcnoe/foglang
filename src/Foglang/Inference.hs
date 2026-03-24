@@ -430,11 +430,14 @@ inferExpr env (EApplication ExprAnn{pos = p} f args) = do
   let fTy = applySubst s2 (exprType tf)
   case fTy of
     TFunc fixed mVar _ -> do
-      -- A zero-param non-variadic function called with () has nSupplied=1 from parser;
-      -- treat the unit arg as a zero-arg call so we don't recurse into ret.
-      let isUnitCall = null fixed && case (mVar, targs) of (Nothing, [EUnitLit _]) -> True; _ -> False
+      -- `f ()` is ambiguous at parse time — EApplication f [EUnitLit] could mean:
+      --   1. Call zero-param non-variadic function (() is call syntax)
+      --   2. Call variadic function with no variadic args (() is empty sentinel)
+      --   3. Call function with one arg, the unit value ()
+      -- Only the type of f disambiguates, so we detect case 1 here.
+      let isZeroArgCall = null fixed && case (mVar, targs) of (Nothing, [EUnitLit _]) -> True; _ -> False
           nFixed = length fixed
-          nSupplied = if isUnitCall then 0 else length targs
+          nSupplied = if isZeroArgCall then 0 else length targs
       -- Unify each arg with corresponding param type (including curried inner params)
       case mVar of
         Nothing -> do
@@ -588,29 +591,20 @@ collectLiteralDefaults = foldMapExpr collectNode
 -- models Go builtin signatures with real types (or adds TupleType), this
 -- blanket standalone-TVar defaulting can be removed.
 defaultRemainingTVars :: Expr -> Subst
-defaultRemainingTVars = foldMapExpr defaultNode
+defaultRemainingTVars = foldMapExpr (\expr -> Map.unions (map (walk True) (exprTypes expr)))
   where
-    defaultNode expr = Map.unions (map goType (exprTypes expr))
-
-    -- Walk into a type: default standalone TVars and TVars inside collections,
-    -- but for TFunc params/returns, only default TVars inside collections.
-    goType (TVar n) = Map.singleton n (TNamed (Ident "opaque"))
-    goType (TConstrained n _) = Map.singleton n (TNamed (Ident "opaque"))
-    goType (TSlice t) = defaultInCollection t
-    goType (TMap k v) = Map.union (defaultInCollection k) (defaultInCollection v)
-    goType (TFunc ps mVar ret) = Map.unions (map goCollectionOnly ps ++ maybe [] (\v -> [goCollectionOnly v]) mVar ++ [goCollectionOnly ret])
-    goType (TNamed _) = Map.empty
-
-    -- Inside TFunc params/returns: only default TVars inside collection types.
-    goCollectionOnly (TSlice t) = defaultInCollection t
-    goCollectionOnly (TMap k v) = Map.union (defaultInCollection k) (defaultInCollection v)
-    goCollectionOnly (TFunc ps mVar ret) = Map.unions (map goCollectionOnly ps ++ maybe [] (\v -> [goCollectionOnly v]) mVar ++ [goCollectionOnly ret])
-    goCollectionOnly _ = Map.empty
-
-    -- Default a TVar that's inside a collection type
-    defaultInCollection (TVar n) = Map.singleton n (TNamed (Ident "opaque"))
-    defaultInCollection (TConstrained n _) = Map.singleton n (TNamed (Ident "opaque"))
-    defaultInCollection other = goCollectionOnly other  -- recurse for nested types
+    -- Walk a type, defaulting TVars to opaque when `defTVars` is True.
+    -- Collections (TSlice, TMap) enable defaulting; TFunc disables it
+    -- (unconstrained func params/returns are real inference errors).
+    walk True  (TVar n)           = Map.singleton n (TNamed (Ident "opaque"))
+    walk True  (TConstrained n _) = Map.singleton n (TNamed (Ident "opaque"))
+    walk False (TVar _)           = Map.empty
+    walk False (TConstrained _ _) = Map.empty
+    walk _     (TSlice t)         = walk True t
+    walk _     (TMap k v)         = Map.union (walk True k) (walk True v)
+    walk _     (TFunc ps mVar ret) =
+      Map.unions (map (walk False) ps ++ maybe [] (\v -> [walk False v]) mVar ++ [walk False ret])
+    walk _     (TNamed _)         = Map.empty
 
 -- Collect all remaining TVars in an Expr tree as errors.
 checkNoTVars :: Expr -> [InferError]

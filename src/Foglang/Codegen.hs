@@ -322,10 +322,10 @@ genExpr (EApplication _ tf targs) =
             else
               let args = case mVarTy of
                     Nothing ->
-                      -- When nFixed == 0 (PUnit), strip the single () sentinel fixed arg.
+                      -- Strip the () sentinel the parser emits for zero-arg calls.
                       if nFixed == 0 then [] else map genExpr targs
                     Just _ ->
-                      -- Strip a single () sentinel (indicates empty variadic arg provided).
+                      -- Strip a single () sentinel (empty variadic arg provided).
                       -- EVariadicSpread nodes emit expr... via genExpr.
                       let varArgs = case drop nFixed targs of
                             [EUnitLit _] -> []
@@ -379,7 +379,6 @@ genImport (ImportDecl Blank path) = "import _ \"" <> path <> "\"\n"
 genImport (ImportDecl (Alias i) path) = "import " <> identText i <> " \"" <> path <> "\"\n"
 
 genHeader :: Header -> T.Text
-genHeader (Header (PackageClause pkg) []) = "package " <> identText pkg <> "\n"
 genHeader (Header (PackageClause pkg) imports) =
   "package "
     <> identText pkg
