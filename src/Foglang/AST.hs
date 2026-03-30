@@ -8,6 +8,8 @@ module Foglang.AST
     tsFloat,
     TypeExpr (..),
     pattern UnitType,
+    isUnitLike,
+    isWildcard,
     ExprAnn (..),
     Param (..),
     Binding (..),
@@ -85,6 +87,18 @@ data TypeExpr
   | TVar Int -- type variable, resolved during type inference
   | TConstrained Int TypeSet -- type variable constrained to a set of numeric types
   deriving (Eq, Show)
+
+-- Is a type a unit-like empty type (() or struct{})?
+isUnitLike :: TypeExpr -> Bool
+isUnitLike (TNamed (Ident "()")) = True
+isUnitLike (TNamed (Ident "struct{}")) = True
+isUnitLike _ = False
+
+-- Is a type opaque or any (wildcard types that unify freely)?
+isWildcard :: TypeExpr -> Bool
+isWildcard (TNamed (Ident "opaque")) = True
+isWildcard (TNamed (Ident "any")) = True
+isWildcard _ = False
 
 pattern UnitType :: TypeExpr
 pattern UnitType = TNamed (Ident "()")

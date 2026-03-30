@@ -6,7 +6,7 @@ import Data.Map.Strict qualified as Map
 import Data.Semigroup (Max (..))
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes, tsInt, tsFloat)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes, tsInt, tsFloat, isWildcard, isUnitLike)
 import Text.Megaparsec.Pos (SourcePos)
 
 -- Environment maps names to their types.
@@ -107,18 +107,6 @@ occursIn n (TFunc ps mVar ret) =
   any (occursIn n) ps || maybe False (occursIn n) mVar || occursIn n ret
 occursIn _ (TNamed _) = False
 
--- Is a type opaque or any (wildcard types that unify freely)?
-isWildcard :: TypeExpr -> Bool
-isWildcard (TNamed (Ident "opaque")) = True
-isWildcard (TNamed (Ident "any")) = True
-isWildcard _ = False
-
--- Do () and struct{} unify?
-isUnitLike :: Ident -> Bool
-isUnitLike (Ident "()") = True
-isUnitLike (Ident "struct{}") = True
-isUnitLike _ = False
-
 -- Operator classification
 comparisonOps :: [T.Text]
 comparisonOps = ["==", "!=", "<", ">", "<=", ">="]
@@ -127,70 +115,66 @@ logicalOps :: [T.Text]
 logicalOps = ["&&", "||"]
 
 -- Unify two types, returning updated substitution or error.
--- IMPORTANT: applies current substitution to both sides first.
+-- Applies current substitution to both sides before matching.
 unify :: SourcePos -> Subst -> TypeExpr -> TypeExpr -> Either InferError Subst
-unify p s t1 t2 = unify' p s (applySubst s t1) (applySubst s t2)
-
--- Unify two types that have already had substitution applied.
-unify' :: SourcePos -> Subst -> TypeExpr -> TypeExpr -> Either InferError Subst
--- Wildcard types unify freely with anything
-unify' _ s t1 _ | isWildcard t1 = Right s
-unify' _ s _ t2 | isWildcard t2 = Right s
--- TConstrained ~ TConstrained: must be the same type set
-unify' p s (TConstrained n ts1) (TConstrained m ts2)
-  | n == m = Right s
-  | ts1 == ts2 = Right (Map.insert m (TConstrained n ts1) s)
-  | otherwise = Left (TypeMismatch p (TConstrained n ts1) (TConstrained m ts2))
--- TConstrained ~ TNamed: check membership
-unify' p s (TConstrained n ts) (TNamed t)
-  | t `Set.member` tsMembers ts = Right (Map.insert n (TNamed t) s)
-  | otherwise = Left (TypeMismatch p (TConstrained n ts) (TNamed t))
-unify' p s (TNamed t) (TConstrained n ts)
-  | t `Set.member` tsMembers ts = Right (Map.insert n (TNamed t) s)
-  | otherwise = Left (TypeMismatch p (TNamed t) (TConstrained n ts))
--- TConstrained ~ TVar: propagate the constraint
-unify' _ s (TConstrained n ts) (TVar m)
-  | n == m = Right s
-  | otherwise = Right (Map.insert m (TConstrained n ts) s)
-unify' _ s (TVar m) (TConstrained n ts)
-  | n == m = Right s
-  | otherwise = Right (Map.insert m (TConstrained n ts) s)
--- TVar on left
-unify' p s (TVar n) t2
-  | TVar n == t2 = Right s
-  | occursIn n t2 = Left (OccursIn p n t2)
-  | otherwise = Right (Map.insert n t2 s)
--- TVar on right
-unify' p s t1 (TVar n)
-  | occursIn n t1 = Left (OccursIn p n t1)
-  | otherwise = Right (Map.insert n t1 s)
--- Named types
-unify' p s (TNamed a) (TNamed b)
-  | a == b = Right s
-  | isUnitLike a && isUnitLike b = Right s
-  | otherwise = Left (TypeMismatch p (TNamed a) (TNamed b))
--- Slice types
-unify' p s (TSlice a) (TSlice b) = unify p s a b
--- Map types
-unify' p s (TMap k1 v1) (TMap k2 v2) = do
-  s' <- unify p s k1 k2
-  unify p s' v1 v2
--- Function types
-unify' p s (TFunc as va ra) (TFunc bs vb rb) = do
-  s' <- unifyPairwise s as bs
-  s'' <- case (va, vb) of
-    (Nothing, Nothing) -> Right s'
-    (Just a, Just b) -> unify p s' a b
-    _ -> Left (TypeMismatch p (TFunc as va ra) (TFunc bs vb rb))
-  unify p s'' ra rb
-  where
-    unifyPairwise sub [] [] = Right sub
-    unifyPairwise sub (a : as') (b : bs') = do
-      sub' <- unify p sub a b
-      unifyPairwise sub' as' bs'
-    unifyPairwise _ _ _ = Left (TypeMismatch p (TFunc as va ra) (TFunc bs vb rb))
--- Mismatched constructors
-unify' p _ t1 t2 = Left (TypeMismatch p t1 t2)
+unify p s rawT1 rawT2 =
+  let t1 = applySubst s rawT1
+      t2 = applySubst s rawT2
+      mismatch = Left (TypeMismatch p t1 t2)
+      resolveConstrained n ts t
+        | t `Set.member` tsMembers ts = Right (Map.insert n (TNamed t) s)
+        | otherwise = mismatch
+      bindConstrained n ts m
+        | n == m    = Right s
+        | otherwise = Right (Map.insert m (TConstrained n ts) s)
+      bindTVar n t
+        | TVar n == t  = Right s
+        | occursIn n t = Left (OccursIn p n t)
+        | otherwise    = Right (Map.insert n t s)
+      unifyPairwise sub [] [] = Right sub
+      unifyPairwise sub (a : as') (b : bs') = do
+        sub' <- unify p sub a b
+        unifyPairwise sub' as' bs'
+      unifyPairwise _ _ _ = mismatch
+  in case (t1, t2) of
+    -- Wildcard types unify freely with anything
+    _ | isWildcard t1 || isWildcard t2 -> Right s
+    -- Unit-like types unify freely with other unit-like
+    _ | isUnitLike t1 && isUnitLike t2 -> Right s
+    -- TConstrained ~ TConstrained: must be the same type set
+    (TConstrained n ts1, TConstrained m ts2)
+      | n == m    -> Right s
+      | ts1 == ts2 -> Right (Map.insert m (TConstrained n ts1) s)
+      | otherwise -> mismatch
+    -- TConstrained ~ TNamed: check membership
+    (TConstrained n ts, TNamed t) -> resolveConstrained n ts t
+    (TNamed t, TConstrained n ts) -> resolveConstrained n ts t
+    -- TConstrained ~ TVar: propagate the constraint
+    (TConstrained n ts, TVar m) -> bindConstrained n ts m
+    (TVar m, TConstrained n ts) -> bindConstrained n ts m
+    -- TVar: bind to the other type (with occurs check)
+    (TVar n, _) -> bindTVar n t2
+    (_, TVar n) -> bindTVar n t1
+    -- Named types
+    (TNamed a, TNamed b)
+      | a == b -> Right s
+      | otherwise -> mismatch
+    -- Slice types
+    (TSlice a, TSlice b) -> unify p s a b
+    -- Map types
+    (TMap k1 v1, TMap k2 v2) -> do
+      s' <- unify p s k1 k2
+      unify p s' v1 v2
+    -- Function types
+    (TFunc as va ra, TFunc bs vb rb) -> do
+      s' <- unifyPairwise s as bs
+      s'' <- case (va, vb) of
+        (Nothing, Nothing) -> Right s'
+        (Just a, Just b)   -> unify p s' a b
+        _                  -> mismatch
+      unify p s'' ra rb
+    -- Mismatched constructors
+    _ -> mismatch
 
 -- The result type when applying a function to nArgs arguments.
 -- Collect up to n param types from a (possibly nested) function type for unification.
@@ -482,54 +466,6 @@ inferExpr env (EApplication ExprAnn{pos = p} f args) = do
 inferExprs :: Env -> [Expr] -> Infer [Expr]
 inferExprs env = mapM (inferExpr env)
 
--- | Map a function over every node in Expr tree (bottom up).
-mapExpr :: (Expr -> Expr) -> Expr -> Expr
-mapExpr f = go
-  where
-    go e = f $ case e of
-      EInfixOp a e1 op e2         -> EInfixOp a (go e1) op (go e2)
-      EIf a c th el               -> EIf a (go c) (go th) (go el)
-      ESequence a es              -> ESequence a (map go es)
-      ELambda a (Binding ps rt body) -> ELambda a (Binding ps rt (go body))
-      ELet a name (Binding ps rt rhs) mInE -> ELet a name (Binding ps rt (go rhs)) (fmap go mInE)
-      EIndex a e' idx             -> EIndex a (go e') (go idx)
-      ESliceLit a es              -> ESliceLit a (map go es)
-      EVariadicSpread a e'        -> EVariadicSpread a (go e')
-      EApplication a fn args      -> EApplication a (go fn) (map go args)
-      EMatch a scrut arms         -> EMatch a (go scrut) (map (\(MatchArm armPos pat body) -> MatchArm armPos pat (go body)) arms)
-      ECoerce a c inner           -> ECoerce a c (go inner)
-      -- no children
-      EUnitLit {}                 -> e
-      EVar {}                     -> e
-      EIntLit {}                  -> e
-      EFloatLit {}                -> e
-      EStrLit {}                  -> e
-      EMapLit {}                  -> e
-
--- | Fold over AST with monoid (depth-first, pre-order).
-foldMapExpr :: Monoid m => (Expr -> m) -> Expr -> m
-foldMapExpr f expr = f expr <> children
-  where
-    children = case expr of
-      EInfixOp _ e1 _ e2          -> foldMapExpr f e1 <> foldMapExpr f e2
-      EIf _ c t e                 -> foldMapExpr f c <> foldMapExpr f t <> foldMapExpr f e
-      ESequence _ es              -> foldMap (foldMapExpr f) es
-      ELambda _ (Binding _ _ body) -> foldMapExpr f body
-      ELet _ _ (Binding _ _ rhs) mInE -> foldMapExpr f rhs <> foldMap (foldMapExpr f) mInE
-      EIndex _ e idx              -> foldMapExpr f e <> foldMapExpr f idx
-      ESliceLit _ es              -> foldMap (foldMapExpr f) es
-      EVariadicSpread _ e         -> foldMapExpr f e
-      EApplication _ fn args      -> foldMapExpr f fn <> foldMap (foldMapExpr f) args
-      EMatch _ scrut arms         -> foldMapExpr f scrut <> foldMap (\(MatchArm _ _ body) -> foldMapExpr f body) arms
-      ECoerce _ _ inner           -> foldMapExpr f inner
-      -- no children
-      EUnitLit {}                 -> mempty
-      EVar {}                     -> mempty
-      EIntLit {}                  -> mempty
-      EFloatLit {}                -> mempty
-      EStrLit {}                  -> mempty
-      EMapLit {}                  -> mempty
-
 -- Main entry: runs the full inference pipeline on a parsed Expr tree.
 --
 --   1. Infer types (constraint generation + unification)
@@ -540,6 +476,56 @@ foldMapExpr f expr = f expr <> children
 --   6. Insert unit<->struct{} coercion wrappers
 inferAndResolve :: Expr -> Either [InferError] Expr
 inferAndResolve expr = do
+  -- Map a function over every node in Expr tree (bottom up).
+  let
+    mapExpr :: (Expr -> Expr) -> Expr -> Expr
+    mapExpr f = go
+      where
+        go e = f $ case e of
+          EInfixOp a e1 op e2         -> EInfixOp a (go e1) op (go e2)
+          EIf a c th el               -> EIf a (go c) (go th) (go el)
+          ESequence a es              -> ESequence a (map go es)
+          ELambda a (Binding ps rt body) -> ELambda a (Binding ps rt (go body))
+          ELet a name (Binding ps rt rhs) mInE -> ELet a name (Binding ps rt (go rhs)) (fmap go mInE)
+          EIndex a e' idx             -> EIndex a (go e') (go idx)
+          ESliceLit a es              -> ESliceLit a (map go es)
+          EVariadicSpread a e'        -> EVariadicSpread a (go e')
+          EApplication a fn args      -> EApplication a (go fn) (map go args)
+          EMatch a scrut arms         -> EMatch a (go scrut) (map (\(MatchArm armPos pat body) -> MatchArm armPos pat (go body)) arms)
+          ECoerce a c inner           -> ECoerce a c (go inner)
+          -- no children
+          EUnitLit {}                 -> e
+          EVar {}                     -> e
+          EIntLit {}                  -> e
+          EFloatLit {}                -> e
+          EStrLit {}                  -> e
+          EMapLit {}                  -> e
+
+  -- Fold over AST with monoid (depth-first, pre-order).
+  let
+    foldMapExpr :: Monoid m => (Expr -> m) -> Expr -> m
+    foldMapExpr f expr' = f expr' <> children
+      where
+        children = case expr' of
+          EInfixOp _ e1 _ e2          -> foldMapExpr f e1 <> foldMapExpr f e2
+          EIf _ c t e'                -> foldMapExpr f c <> foldMapExpr f t <> foldMapExpr f e'
+          ESequence _ es              -> foldMap (foldMapExpr f) es
+          ELambda _ (Binding _ _ body) -> foldMapExpr f body
+          ELet _ _ (Binding _ _ rhs) mInE -> foldMapExpr f rhs <> foldMap (foldMapExpr f) mInE
+          EIndex _ e' idx             -> foldMapExpr f e' <> foldMapExpr f idx
+          ESliceLit _ es              -> foldMap (foldMapExpr f) es
+          EVariadicSpread _ e'        -> foldMapExpr f e'
+          EApplication _ fn args      -> foldMapExpr f fn <> foldMap (foldMapExpr f) args
+          EMatch _ scrut arms         -> foldMapExpr f scrut <> foldMap (\(MatchArm _ _ body) -> foldMapExpr f body) arms
+          ECoerce _ _ inner           -> foldMapExpr f inner
+          -- no children
+          EUnitLit {}                 -> mempty
+          EVar {}                     -> mempty
+          EIntLit {}                  -> mempty
+          EFloatLit {}                -> mempty
+          EStrLit {}                  -> mempty
+          EMapLit {}                  -> mempty
+
   -- Find the maximum TVar ID in an Expr tree, so we can seed the counter above it.
   let maxTVar :: Int
       maxTVar = getMax $ foldMapExpr (\e -> Max (maximum (0 : map maxTy (exprTypes e)))) expr
@@ -649,8 +635,8 @@ inferAndResolve expr = do
       insertCoercions = go
         where
           -- Do two function types differ only in their return type's unit<->struct{} name?
-          funcVoidMismatch (TFunc _ _ (TNamed r1)) (TFunc _ _ (TNamed r2)) =
-            isUnitLike r1 && isUnitLike r2 && r1 /= r2
+          funcVoidMismatch (TFunc _ _ t1) (TFunc _ _ t2) =
+            isUnitLike t1 && isUnitLike t2 && t1 /= t2
           funcVoidMismatch _ _ = False
 
           coerceIfNeeded expectedTy e
