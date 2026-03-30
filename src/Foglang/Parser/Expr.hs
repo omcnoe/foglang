@@ -3,7 +3,7 @@ module Foglang.Parser.Expr (sequence') where
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), TypeSet (..), pattern UnitType, exprPos)
+import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), pattern UnitType, exprPos, tsInt, tsFloat)
 import Foglang.Parser (Parser, SC(..), freshConstrained, freshTVar, keyword, lexeme, symbol, scn, LineIndent(..), unLineIndent)
 import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard)
 import Foglang.Parser.Patterns (pattern')
@@ -195,8 +195,8 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       try funcExpr
         <|> try matchExpr
         <|> try ifExpr
-        <|> try (do p <- getSourcePos; t <- freshConstrained TSFloat; EFloatLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' floatLit)
-        <|> try (do p <- getSourcePos; t <- freshConstrained TSInt; EIntLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' intLit)
+        <|> try (do p <- getSourcePos; t <- freshConstrained tsFloat; EFloatLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' floatLit)
+        <|> try (do p <- getSourcePos; t <- freshConstrained tsInt; EIntLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' intLit)
         <|> try (do p <- getSourcePos; EStrLit ExprAnn { pos = p, ty = TNamed (Ident "string"), isStmt = False } <$> lexeme' stringLit)
         <|> try sliceLit
         <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn { pos = p, ty = t, isStmt = False } <$ symbol' "{}")

@@ -4,6 +4,8 @@ module Foglang.AST
     FloatLit (..),
     StringLit (..),
     TypeSet (..),
+    tsInt,
+    tsFloat,
     TypeExpr (..),
     pattern UnitType,
     ExprAnn (..),
@@ -27,6 +29,7 @@ module Foglang.AST
   )
 where
 
+import Data.Set qualified as Set
 import Data.String (IsString (..))
 import Data.Text qualified as T
 import Text.Megaparsec.Pos (SourcePos)
@@ -53,10 +56,26 @@ newtype StringLit = StringLit T.Text
   deriving (Eq, Show)
 
 -- Constraint sets for type variables introduced by literals.
-data TypeSet
-  = TSInt    -- int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr, byte, rune
-  | TSFloat  -- float32, float64
+data TypeSet = TypeSet
+  { tsMembers :: Set.Set Ident
+  , tsDefault :: Ident
+  }
   deriving (Eq, Show)
+
+tsInt :: TypeSet
+tsInt = TypeSet
+  { tsMembers = Set.fromList $ map Ident
+      ["int", "int8", "int16", "int32", "int64",
+       "uint", "uint8", "uint16", "uint32", "uint64",
+       "uintptr", "byte", "rune"]
+  , tsDefault = Ident "int"
+  }
+
+tsFloat :: TypeSet
+tsFloat = TypeSet
+  { tsMembers = Set.fromList $ map Ident ["float32", "float64"]
+  , tsDefault = Ident "float64"
+  }
 
 data TypeExpr
   = TNamed Ident -- named type, e.g. int, float64, bool, unit
