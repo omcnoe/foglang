@@ -640,6 +640,9 @@ inferAndResolve expr = do
               fixedCoerced = zipWith (\t a -> coerceIfNeeded t (go a)) fixedTys args
               varArgs = drop (length fixedTys) args
               varCoerced = case (mVarTy, varArgs) of
+                -- Zero-variadic sentinel: pass through unchanged
+                (Just _, [EUnitLit _]) -> varArgs
+                -- Variadic args: coerce each against the variadic type
                 (Just varTy, _) -> map (\a -> coerceIfNeeded varTy (go a)) varArgs
                 (Nothing, [])   -> []
                 (Nothing, _)    -> error "coerceArgs: excess args on non-variadic function (unreachable)"

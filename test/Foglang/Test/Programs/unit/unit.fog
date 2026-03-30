@@ -116,6 +116,15 @@ let getCoercedCallback () => (() => struct{}) = zeroParam
 // Return coercion: body type (() => struct{}) but declared return (() => ())
 let getCoercedCallbackUnit () => (() => ()) = zeroParamStruct
 
+// Variadic coercion: pass (() => ()) where ...(() => struct{}) expected
+let applyVariadicCallbacks (fns : ...(() => struct{})) => () =
+  match fns with
+    | f :: rest => f ()
+    | [] => ()
+
+let variadicCoercion () => () =
+  applyVariadicCallbacks zeroParam
+
 // 1. Void if in expression context (genExprIIFE void+sideEffects for EIf)
 let voidIfInExpr () => int =
   if true then zeroParam () else zeroParam ()
@@ -178,6 +187,7 @@ let main () => () =
   argCoerceToUnit ()
   getCoercedCallback ()
   getCoercedCallbackUnit ()
+  variadicCoercion ()
   fmt.Println (voidIfInExpr ())
   fmt.Println (voidMatchInExpr 0)
   fmt.Println (voidSeqInExpr ())

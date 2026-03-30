@@ -104,6 +104,21 @@ func getCoercedCallback() func() struct{} {
 func getCoercedCallbackUnit() func() {
 	return func() { zeroParamStruct() }
 }
+func applyVariadicCallbacks(fns ...func() struct{}) {
+	_scrut1 := fns
+	_ = _scrut1
+	if len(_scrut1) > 0 {
+		f := _scrut1[0]
+		_ = f
+		rest := _scrut1[1:]
+		_ = rest
+		f()
+	} else if len(_scrut1) == 0 {
+	}
+}
+func variadicCoercion() {
+	applyVariadicCallbacks(func() struct{} { zeroParam(); return struct{}{} })
+}
 func voidIfInExpr() int {
 	if true {
 		zeroParam()
@@ -172,6 +187,7 @@ func main() {
 	argCoerceToUnit()
 	getCoercedCallback()
 	getCoercedCallbackUnit()
+	variadicCoercion()
 	fmt.Println(voidIfInExpr())
 	fmt.Println(voidMatchInExpr(0))
 	fmt.Println(voidSeqInExpr())
