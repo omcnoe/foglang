@@ -9,19 +9,19 @@
 ## Function definitions and calls
 
 ### Zero-param rewrite
-`()` in a parameter list means "unit value" — but a sole anonymous `()` is rewritten to a zero-param Go function (no parameter at all). Any other use of `()` becomes `struct{}` in Go.
+`()` in a parameter list means "unit value" - but a sole anonymous `()` is rewritten to a zero-param Go function (no parameter at all). Any other use of `()` becomes `struct{}` in Go.
 
 ### Zero-return rewrite
 A `... => ()` return type is also rewritten: the Go return type is omitted as is the final `return`.
 
 | fog | Go | note |
 |---|---|---|
-| `let f () => int` | `func f() int` | sole anonymous `()` → zero-param rewrite |
-| `let f () -> () => int` | `func f(_p0 struct{}, _p1 struct{}) int` | multiple `()` → struct{} params |
+| `let f () => int` | `func f() int` | sole anonymous `()` -> zero-param rewrite |
+| `let f () -> () => int` | `func f(_p0 struct{}, _p1 struct{}) int` | multiple `()` -> struct{} params |
 | `let f (x : struct{}) => int` | `func f(x struct{}) int` | explicit `struct{}` param |
 | `let f (x : ()) => int` | compile error | `()` as a named param type has no representable function type due to zero-param rewrite; use `(x : struct{})` |
-| `let f () => ()` | `func f() { ... }` | `=> ()` → zero-return rewrite, no return type or return statement |
-| `let f () => struct{}` | `func f() struct{} { return struct{}{} }` | `=> struct{}` → return type and statement kept |
+| `let f () => ()` | `func f() { ... }` | `=> ()` -> zero-return rewrite, no return type or return statement |
+| `let f () => struct{}` | `func f() struct{} { return struct{}{} }` | `=> struct{}` -> return type and statement kept |
 
 At call sites the fog programmer can always write `f ()`. The compiler emits `f()` or `f(struct{}{})` based on the callee's Go type.
 

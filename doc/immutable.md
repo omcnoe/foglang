@@ -7,16 +7,16 @@ Fog maps (`map[K]V`) have immutable semantics. Operations that modify a map retu
 ### Operations
 
 ```fog
-// Lookup — returns (V, bool), no copy
+// Lookup - returns (V, bool), no copy
 table[key]
 
-// Insert — returns new map with key set
+// Insert - returns new map with key set
 let table = insert table key value
 
-// Delete — returns new map with key removed
+// Delete - returns new map with key removed
 let table = delete table key
 
-// Insert with merge function — if key exists, merge old and new values
+// Insert with merge function - if key exists, merge old and new values
 let table = insertWith append table key [p]
 ```
 
@@ -62,19 +62,19 @@ Fog slices (`[]T`) have immutable semantics.
 ### Operations
 
 ```fog
-// Index access — read, no copy
+// Index access - read, no copy
 xs[i]
 
-// Length — read, no copy
+// Length - read, no copy
 len xs
 
-// Cons — prepend element, returns new slice
+// Cons - prepend element, returns new slice
 x :: xs
 
-// Append — returns new slice
+// Append - returns new slice
 append xs ys
 
-// Pattern matching — destructure head and tail
+// Pattern matching - destructure head and tail
 match xs with
   | [] => ...
   | x :: rest => ...

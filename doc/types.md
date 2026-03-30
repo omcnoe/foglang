@@ -21,17 +21,17 @@ let f (x : int) (y : string) => bool = ...
 
 Each annotated parameter is written `(name : type)`. The return type is written `=> type` after the last parameter.
 
-**Type annotations are currently mandatory — type inference is not yet implemented.**
+**Type annotations are optional - type inference resolves omitted types from context. See [type-inference.md](type-inference.md).**
 
-Parameters may optionally be separated by `->` instead of spaces — purely stylistic:
+Parameters may optionally be separated by `->` instead of spaces - purely stylistic:
 
 ```
-let f (x : int) -> (y : string) => bool = ...   -- identical to above
+let f (x : int) -> (y : string) => bool = ...  - identical to above
 ```
 
 ### Token roles
 
-`->` always means "next parameter". `=>` always means "returns". This holds identically in both definition heads and type expressions — the definition head syntax mirrors the type expression syntax exactly, just with names added:
+`->` always means "next parameter". `=>` always means "returns". This holds identically in both definition heads and type expressions - the definition head syntax mirrors the type expression syntax exactly, just with names added:
 
 ```
 let mult (x : float64) -> (y : float64) => float64 = x * y
@@ -48,16 +48,16 @@ Inside `(name : type)` param annotations, a type is either a plain name, a compo
 - plain name: `int`, `bool`, `string`, ...
 - slice type: `[]T`
 - map type: `map[K]V`
-- function type: `(T1 -> T2 -> ... => Tr)` — always in parens
+- function type: `(T1 -> T2 -> ... => Tr)` - always in parens
 
 ```
-int                           -- a plain type
-[]int                         -- slice of int
-[][]string                    -- slice of slice of string
-map[string]int                -- map from string to int
-map[int][]int                 -- map from int to slice of int
-(int -> int => int)           -- takes int, takes int, returns int
-((int -> int => int) => bool) -- takes a 2-arg int function, returns bool
+int                          - a plain type
+[]int                        - slice of int
+[][]string                   - slice of slice of string
+map[string]int               - map from string to int
+map[int][]int                - map from int to slice of int
+(int -> int => int)          - takes int, takes int, returns int
+((int -> int => int) => bool) - takes a 2-arg int function, returns bool
 ```
 
 ### Type constraints (generics)
@@ -74,13 +74,13 @@ This keeps `=>` unambiguously meaning "returns" throughout the language.
 
 ### Opaque type (known limitation)
 
-Qualified Go names (e.g. `fmt.Println`, `os.Args`) have type `opaque` in fog's type system — their real Go types are not modeled. `opaque` unifies freely with any type during inference, which means type errors involving opaque expressions are not caught at compile time. This can produce invalid Go code, for example:
+Qualified Go names (e.g. `fmt.Println`, `os.Args`) have type `opaque` in fog's type system - their real Go types are not modeled. `opaque` unifies freely with any type during inference, which means type errors involving opaque expressions are not caught at compile time. This can produce invalid Go code, for example:
 
 ```
 let f (x : int) => struct{} =
   fmt.Println "zero"
 ```
 
-Generates `return fmt.Println("zero")` — invalid because `fmt.Println` returns `(int, error)`, not `struct{}`. The Go compiler will catch this, but fog won't.
+Generates `return fmt.Println("zero")` - invalid because `fmt.Println` returns `(int, error)`, not `struct{}`. The Go compiler will catch this, but fog won't.
 
-This is not a bug to fix piecemeal — any position where opaque flows into a concrete type context is potentially wrong (return values, arguments, bindings, operators). The real fix is modeling Go function signatures with real types, which will eliminate opaque. Until then, opaque means "trust the programmer, defer type checking to `go build`."
+This is not a bug to fix piecemeal - any position where opaque flows into a concrete type context is potentially wrong (return values, arguments, bindings, operators). The real fix is modeling Go function signatures with real types, which will eliminate opaque. Until then, opaque means "trust the programmer, defer type checking to `go build`."

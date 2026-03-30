@@ -6,13 +6,13 @@ Foglang is indentation-sensitive. There are no braces or semicolons for delimiti
 
 The **line-indent** of a construct is the column of the first non-whitespace character on the physical line where the construct starts. All indentation decisions are made relative to the line-indent:
 
-- **`>` line-indent** → child (part of the construct)
-- **`==` line-indent** → sibling (not part of the construct, but part of the enclosing construct)
-- **`<` line-indent** → exit (not part of the enclosing construct either)
+- **`>` line-indent** -> child (part of the construct)
+- **`==` line-indent** -> sibling (not part of the construct, but part of the enclosing construct)
+- **`<` line-indent** -> exit (not part of the enclosing construct either)
 
-This rule applies uniformly at every nesting level — sequence items are children of their keyword, continuation lines are children of their expression. The same rule, applied recursively.
+This rule applies uniformly at every nesting level - sequence items are children of their keyword, continuation lines are children of their expression. The same rule, applied recursively.
 
-A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression — it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body.
+A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression - it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body.
 
 Sequences appear in these positions:
 
@@ -36,55 +36,55 @@ Children of a construct must be at column **strictly greater than** the construc
 This governs both sequence membership and expression continuation:
 
 ```
-let main () => () =               -- "let" line-indent = col 1
-  let x : int =                   -- "let x" line-indent = col 3
-    1                              -- col 5 > col 3 → child of "let x" (sequence item)
-      + 2                          -- col 7 > col 5 → child of "1" (continuation)
-    fmt.Println "hello"            -- col 5 == col 5 → sibling of "1" (new sequence item)
-  fmt.Println x                    -- col 3 == col 3 → sibling of "let x" (in-expression)
+let main () => () =              - "let" line-indent = col 1
+  let x : int =                  - "let x" line-indent = col 3
+    1                             - col 5 > col 3 -> child of "let x" (sequence item)
+      + 2                         - col 7 > col 5 -> child of "1" (continuation)
+    fmt.Println "hello"           - col 5 == col 5 -> sibling of "1" (new sequence item)
+  fmt.Println x                   - col 3 == col 3 -> sibling of "let x" (in-expression)
 ```
 
 When an expression starts mid-line (e.g., after `=` on the same line as `let`), its line-indent is the line's leading indentation, not the expression's token column:
 
 ```
-let y : int = (                    -- ( starts mid-line; line-indent = col 1 (the "let" line)
+let y : int = (                   - ( starts mid-line; line-indent = col 1 (the "let" line)
   long
   expression
-) + 1                              -- col 3 > col 1 → continuation of the paren expression
+) + 1                             - col 3 > col 1 -> continuation of the paren expression
 ```
 
 ### Rule 2: Line-indent exception
 
-A line at the same indentation normally starts a sibling, and a line at a greater indentation normally starts a child. However, if the line starts with a token that is unambiguously a child or continuation, it is treated as such — indentation within the construct does not affect its role. The token must still be at column >= the parent construct's line-indent; below that, it exits the construct entirely.
+A line at the same indentation normally starts a sibling, and a line at a greater indentation normally starts a child. However, if the line starts with a token that is unambiguously a child or continuation, it is treated as such - indentation within the construct does not affect its role. The token must still be at column >= the parent construct's line-indent; below that, it exits the construct entirely.
 
 - **Unambiguously infix operators** (`||`, `&&`, `*`, `/`, `==`, `!=`, `>=`, `<=`, `>`, `<`, `::`, `|||`, `&&&`, `^^^`, `<<<`, `>>>`) continue an expression.
 - `|` continues a `match` expression as a new arm.
 - `then`, `else`, `else if` continue an `if` expression.
 
-Ambiguous prefix/infix operators (`+`, `-`) are excluded — at the same column they begin a new sibling.
+Ambiguous prefix/infix operators (`+`, `-`) are excluded - at the same column they begin a new sibling.
 
 ```
 a
-|| b                 -- || at same column as "a", unambiguous → continuation
+|| b                - || at same column as "a", unambiguous -> continuation
 || c
 
 a
-- 3                  -- - is ambiguous, at same column → new sibling
+- 3                 - - is ambiguous, at same column -> new sibling
 
 a
-  - 3                -- indented past "a" → child by Rule 1 → a - 3
+  - 3               - indented past "a" -> child by Rule 1 -> a - 3
 
 match x with
   | 1 =>
     match y with
       | a => "inner"
       | b => "inner"
-  | 2 => "outer"     -- | at same column as outer match → outer arm
+  | 2 => "outer"    - | at same column as outer match -> outer arm
 
 match x with
   | 0 => "zero"
-      | 1 => "one"   -- deeper than previous |, but | is unambiguous → sibling arm
-    | _ => "other"    -- same: unambiguous arm regardless of indentation
+      | 1 => "one"  - deeper than previous |, but | is unambiguous -> sibling arm
+    | _ => "other"   - same: unambiguous arm regardless of indentation
 ```
 
 ## Summary of grammar constructs
@@ -108,20 +108,20 @@ let main () => () =
 
 `let name [params] : type = body` or `let name [params] => returnType = body`
 
-The right-hand side of `=` is a Sequence (line-indent = `let`'s line-indent). Everything after the `let` at the same indentation level in the enclosing Sequence becomes the implicit "in" expression — the scope where the binding is visible.
+The right-hand side of `=` is a Sequence (line-indent = `let`'s line-indent). Everything after the `let` at the same indentation level in the enclosing Sequence becomes the implicit "in" expression - the scope where the binding is visible.
 
 ```
 let main () => () =
-  let x : int = 10       -- binding
-  let y : int = x + 1    -- in-expression of x; also a binding
-  fmt.Println y           -- in-expression of y
+  let x : int = 10      - binding
+  let y : int = x + 1   - in-expression of x; also a binding
+  fmt.Println y          - in-expression of y
 ```
 
 ### Function expression
 
 `func (params) => returnType = body`
 
-The body after `=` is a Sequence. `func` is an expression — it evaluates to a function value and can appear anywhere an expression can.
+The body after `=` is a Sequence. `func` is an expression - it evaluates to a function value and can appear anywhere an expression can.
 
 ```
 let double : (int => int) =
@@ -136,7 +136,7 @@ let double : (int => int) =
 
 The condition, `then` branch, and `else` branch are each Sequences. All branches share the outermost `if`'s line-indent.
 
-`else if` is treated as a single compound keyword — it continues the chain at the same level rather than nesting a new `if` inside the `else` branch. This avoids escalating indentation requirements in `else if` chains.
+`else if` is treated as a single compound keyword - it continues the chain at the same level rather than nesting a new `if` inside the `else` branch. This avoids escalating indentation requirements in `else if` chains.
 
 ```
 if x > 0 then x else 0 - x

@@ -8,7 +8,7 @@ match <scrutinee> with
   | <pattern> => <body>
 ```
 
-`match` is an expression — it returns the value of the matched arm's body.
+`match` is an expression - it returns the value of the matched arm's body.
 
 Arms are prefixed with `|` and use `=>` to separate the pattern from the body. Bodies can be multi-line (indented block) or single expressions.
 
