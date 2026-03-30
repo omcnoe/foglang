@@ -134,13 +134,26 @@ spec = describe "Inference" $ do
       let src = "let fib n =\n  if n < 2\n  then n\n  else fib (n - 1) + fib (n - 2)\nfib 10"
       inferType src `shouldBe` Right intT
 
-    it "curried application (excess args applied to returned function)" $ do
-      let src = "let f (x : int) => (int => int) = func (y : int) => int = x + y\nf 1 2"
+    it "explicit curried call with parens" $ do
+      let src = "let f (x : int) => (int => int) = func (y : int) => int = x + y\n(f 1) 2"
       inferType src `shouldBe` Right intT
 
-    it "curried application (3 levels deep)" $ do
-      let src = "let f (x : int) => (int => (int => int)) = func (y : int) => (int => int) = func (z : int) => int = x + y + z\nf 1 2 3"
-      inferType src `shouldBe` Right intT
+    -- Auto-currying (applying excess args to a returned function) is not supported.
+    -- In languages where every function takes a single parameter (e.g. Haskell, ML),
+    -- `f x y` is sugar for `(f x) y`. Fog has multi-param functions (matching Go),
+    -- so `f x y` means "call f with two args", not "call f with one arg then call
+    -- the result with the second". Use explicit parens for chained calls: `(f x) y`.
+    it "excess args on function-returning function is type error" $
+      inferResult "let f (x : int) => (int => int) = func (y : int) => int = x + y\nf 1 2" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isNotAFunction errs
+          Right _ -> False
+
+    it "excess args on deeply nested function-returning function is type error" $
+      inferResult "let f (x : int) => (int => (int => int)) = func (y : int) => (int => int) = func (z : int) => int = x + y + z\nf 1 2 3" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isNotAFunction errs
+          Right _ -> False
 
     it "higher-order with unresolved function type" $ do
       let src = "let apply f x = f x\napply (func (n : int) => int = n + 1) 5"

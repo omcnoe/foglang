@@ -103,6 +103,8 @@ typeExprGoText (UnitType) = "struct{}"
 typeExprGoText (TNamed (Ident t)) = t
 typeExprGoText (TSlice t) = "[]" <> typeExprGoText t
 typeExprGoText (TMap k v) = "map[" <> typeExprGoText k <> "]" <> typeExprGoText v
+typeExprGoText (TFunc [UnitType] Nothing retTy) =
+  "func()" <> retTypeGoText retTy
 typeExprGoText (TFunc fixedTys mVarTy retTy) =
   "func("
     <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeExprGoText vTy]) mVarTy)
@@ -144,6 +146,7 @@ syntheticParams fixedTys mVarTy =
 -- parameter names (with ... for variadics), ready to be joined with any
 -- pre-supplied arguments.
 closureParamsAndCallArgs :: [TypeExpr] -> Maybe TypeExpr -> (T.Text, [T.Text])
+closureParamsAndCallArgs [UnitType] Nothing = ("", [])
 closureParamsAndCallArgs fixedTys mVarTy = (paramListGoText params, callArgNames params)
   where
     params = syntheticParams fixedTys mVarTy
@@ -364,13 +367,16 @@ genExpr scope (EApplication _ tf targs) =
                   callArgs = T.intercalate ", " (map (genExpr scope) targs ++ argNames)
                in genInlineFunc closureParams retTy (genExpr scope tf <> "(" <> callArgs <> ")")
             else
-              let args = case mVarTy of
+              let -- A single EUnitLit arg matching a single UnitType param is the
+                  -- zero-param call convention: f() in fog -> f() in Go, not f(struct{}{}).
+                  isZeroArgCall = case (fixedTys, targs) of
+                    ([UnitType], [EUnitLit _]) -> True
+                    _ -> False
+                  args = case mVarTy of
                     Nothing ->
-                      -- Strip the () sentinel the parser emits for zero-arg calls.
-                      if nFixed == 0 then [] else map (genExpr scope) targs
+                      if isZeroArgCall then [] else map (genExpr scope) targs
                     Just _ ->
-                      -- Strip a single () sentinel (empty variadic arg provided).
-                      -- EVariadicSpread nodes emit expr... via genExpr.
+                      -- A lone () after fixed args is the sentinel for "no variadic args".
                       let varArgs = case drop nFixed targs of
                             [EUnitLit _] -> []
                             rest -> rest

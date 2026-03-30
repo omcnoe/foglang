@@ -386,25 +386,20 @@ inferExpr env expr = case expr of
 
     -- Infer application where the function type is a known TFunc.
     inferKnownApp p tf targs fTy fixed mVar = do
-      -- `f ()` is ambiguous at parse time — EApplication f [EUnitLit] could mean:
-      --   1. Call zero-param non-variadic function (() is call syntax)
-      --   2. Call variadic function with no variadic args (() is empty sentinel)
-      --   3. Call function with one arg, the unit value ()
-      -- Only the type of f disambiguates, so we detect case 1 here.
-      let isZeroArgCall = null fixed && case (mVar, targs) of (Nothing, [EUnitLit _]) -> True; _ -> False
-          nFixed = length fixed
-          nSupplied = if isZeroArgCall then 0 else length targs
+      let nFixed = length fixed
+          nSupplied = length targs
+      -- Unify fixed args with fixed param types
+      mapM_ (\(arg, paramTy) -> unifyM p (exprType arg) paramTy) (zip targs fixed)
+      -- Unify variadic args (if any)
       case mVar of
-        Nothing ->
-          mapM_ (\(arg, paramTy) -> unifyM p (exprType arg) paramTy)
-            (zip targs (flattenParamTypes nSupplied fTy))
+        Nothing -> return ()
         Just varTy -> do
-          mapM_ (\(arg, paramTy) -> unifyM p (exprType arg) paramTy) (zip targs fixed)
-          -- Variadic args: a lone () after fixed args is the "no variadic args"
-          -- sentinel from the parser (same ambiguity as isZeroArgCall above).
           let varArgs = drop nFixed targs
-              isZeroVariadicCall = case varArgs of [EUnitLit _] -> True; _ -> False
-          if not isZeroVariadicCall && nSupplied > nFixed
+          -- A lone () after fixed args is the parser's sentinel for "no variadic
+          -- args provided" (e.g. `f 1 ()` on a variadic function means call with
+          -- one fixed arg and zero variadic args).
+          let isEmptyVariadic = case varArgs of [EUnitLit _] -> True; _ -> False
+          if not isEmptyVariadic && nSupplied > nFixed
             then mapM_ (unifyVarArg p varTy) varArgs
             else return ()
       s' <- getSubst
@@ -420,23 +415,15 @@ inferExpr env expr = case expr of
           TSlice _ -> lift (Left (MissingSpread (exprPos arg) resolvedArgTy))
           _ -> unifyM p (exprType arg) varTy
 
-    -- Collect param types from a (possibly nested) function type for unification
-    -- during curried application.
-    flattenParamTypes :: Int -> TypeExpr -> [TypeExpr]
-    flattenParamTypes 0 _ = []
-    flattenParamTypes n (TFunc fixed Nothing ret)
-      | n <= length fixed = take n fixed
-      | otherwise = fixed ++ flattenParamTypes (n - length fixed) ret
-    flattenParamTypes n (TFunc fixed (Just _) _) = take n fixed
-    flattenParamTypes _ _ = []
-
     -- The result type after applying n arguments to a function type.
+    -- Partial application (n < fixed params) returns a TFunc with remaining params.
+    -- Excess args beyond fixed params is a type error (no auto-currying into return type).
     resultType :: SourcePos -> TypeExpr -> Int -> Either InferError TypeExpr
     resultType p (TFunc fixed mVar ret) n = case mVar of
       Nothing
         | n == length fixed -> Right ret
         | n < length fixed  -> Right (TFunc (drop n fixed) Nothing ret)
-        | otherwise         -> resultType p ret (n - length fixed)
+        | otherwise         -> Left (NotAFunction p ret)
       Just varTy
         | n > length fixed  -> Right ret
         | n == length fixed -> Right (TFunc [] (Just varTy) ret)
@@ -647,10 +634,15 @@ inferAndResolve expr = do
           go e@(EStrLit {}) = e
           go e@(EMapLit {}) = e
 
-          -- Coerce fixed args where param types disagree; pass variadic args through.
-          coerceArgs (TFunc fixedTys _ _) args =
-            zipWith (\t a -> coerceIfNeeded t (go a)) fixedTys args
-              ++ map go (drop (length fixedTys) args)
+          -- Coerce fixed and variadic args where param types disagree.
+          coerceArgs (TFunc fixedTys mVarTy _) args = fixedCoerced ++ varCoerced
+            where
+              fixedCoerced = zipWith (\t a -> coerceIfNeeded t (go a)) fixedTys args
+              varArgs = drop (length fixedTys) args
+              varCoerced = case (mVarTy, varArgs) of
+                (Just varTy, _) -> map (\a -> coerceIfNeeded varTy (go a)) varArgs
+                (Nothing, [])   -> []
+                (Nothing, _)    -> error "coerceArgs: excess args on non-variadic function (unreachable)"
           coerceArgs _ args = map go args
 
   let initState = InferState { inferSubst = Map.empty, inferNextTVar = maxTVar + 1 }

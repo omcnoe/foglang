@@ -87,7 +87,7 @@ funcTypeExpr sc' = do
     Just _ -> do
       retTy <- typeExpr sc'
       _ <- symbol sc' ")"
-      return $ TFunc [] Nothing retTy
+      return $ TFunc [UnitType] Nothing retTy
     Nothing -> do
       -- Parse fixed params, then check for variadic ...T before =>
       fixedTys <- many (try (typeExpr sc' <* optional (symbol sc' "->")))

@@ -121,11 +121,10 @@ data Binding = Binding [Param] TypeExpr Expr
 
 -- Build the full type for a binding given its params and declared return type.
 -- Value bindings (no params) return retTy directly.
--- A sole anonymous PUnit is a zero-param function: TFunc [] Nothing retTy.
 -- Otherwise, each param contributes to fixedTys/mVarTy.
+-- PUnit contributes UnitType to fixedTys (matching the EUnitLit sentinel at call sites).
 bindingType :: [Param] -> TypeExpr -> TypeExpr
 bindingType [] retTy = retTy
-bindingType [PUnit] retTy = TFunc [] Nothing retTy
 bindingType ps retTy = TFunc fixedTys mVarTy retTy
   where
     fixedTys = [paramType p | p <- ps, not (isVariadic p)]
