@@ -289,8 +289,8 @@ inferExpr env (EInfixOp ExprAnn{pos = p} e1 op e2) = do
         unifyM p rhsTy (TNamed (Ident "bool"))
     _ -> -- arithmetic/bitwise
         unifyM p lhsTy rhsTy
-  s3 <- getSubst
-  let resultTy = infixOpResultType op (applySubst s3 (exprType te1)) (applySubst s3 (exprType te2))
+  s <- getSubst
+  let resultTy = infixOpResultType op (applySubst s (exprType te1)) (applySubst s (exprType te2))
   return (EInfixOp ExprAnn { pos = p, ty = resultTy, isStmt = False } te1 op te2)
 inferExpr env (EIf ExprAnn{pos = p} cond then' else') = do
   tcond <- inferExpr env cond
@@ -298,8 +298,8 @@ inferExpr env (EIf ExprAnn{pos = p} cond then' else') = do
   tthen <- inferExpr env then'
   telse <- inferExpr env else'
   unifyM p (exprType tthen) (exprType telse)
-  s5 <- getSubst
-  return (EIf ExprAnn { pos = p, ty = applySubst s5 (exprType tthen), isStmt = False } tcond tthen telse)
+  s <- getSubst
+  return (EIf ExprAnn { pos = p, ty = applySubst s (exprType tthen), isStmt = False } tcond tthen telse)
 inferExpr env (ESequence ExprAnn{pos = p} exprs) = do
   texprs <- inferExprs env exprs
   let resultTy = case texprs of
@@ -315,8 +315,8 @@ inferExpr env (ELambda ExprAnn{pos = p} (Binding params retTy body)) = do
   tbody <- inferExpr (Map.union paramEnv env) body
   -- Unify the declared return type with the inferred body type
   unifyM p retTy (exprType tbody)
-  s2 <- getSubst
-  let lambdaTy = bindingType params (applySubst s2 retTy)
+  s <- getSubst
+  let lambdaTy = bindingType params (applySubst s retTy)
   return (ELambda ExprAnn { pos = p, ty = lambdaTy, isStmt = False } (Binding params retTy tbody))
 inferExpr env (ELet ExprAnn{pos = p} name (Binding params retTy rhs) mInExpr) = do
   lift (checkNoNamedPUnits p params)
@@ -330,8 +330,8 @@ inferExpr env (ELet ExprAnn{pos = p} name (Binding params retTy rhs) mInExpr) = 
   -- Unify the declared return type with the inferred body type
   unifyM p retTy (exprType trhs)
   -- Use resolved binding type for the continuation environment
-  s2 <- getSubst
-  let resolvedBindTy = applySubst s2 bindTy
+  s <- getSubst
+  let resolvedBindTy = applySubst s bindTy
   let envForCont = Map.insert name resolvedBindTy env
   mtin <- traverse (inferExpr envForCont) mInExpr
   let resultTy = maybe UnitType exprType mtin
@@ -358,8 +358,8 @@ inferExpr env (ESliceLit ExprAnn{pos = p} exprs) = do
     (te : rest) -> do
       -- Unify all element types together
       mapM_ (\e' -> unifyM p (exprType te) (exprType e')) rest
-      s'' <- getSubst
-      let elemTy = applySubst s'' (exprType te)
+      s <- getSubst
+      let elemTy = applySubst s (exprType te)
       return (ESliceLit ExprAnn { pos = p, ty = TSlice elemTy, isStmt = False } texprs)
 inferExpr _ (EMapLit ExprAnn{pos = p}) = do
   kTv <- freshTVar
@@ -373,9 +373,9 @@ inferExpr env (EMatch ExprAnn{pos = p} scrut arms) = do
     [] -> return ()
     (MatchArm _ _ firstBody : rest) ->
       mapM_ (\(MatchArm _ _ body) -> unifyM p (exprType firstBody) (exprType body)) rest
-  s3 <- getSubst
+  s <- getSubst
   let resultTy = case tarms of
-        (MatchArm _ _ body : _) -> applySubst s3 (exprType body)
+        (MatchArm _ _ body : _) -> applySubst s (exprType body)
         [] -> UnitType
   return (EMatch ExprAnn { pos = p, ty = resultTy, isStmt = False } tscrut tarms)
   where
@@ -389,8 +389,8 @@ inferExpr env (EMatch ExprAnn{pos = p} scrut arms) = do
       let scrutTy = applySubst s (exprType tscrut)
       -- Generate constraints from the pattern
       unifyPattern armPos scrutTy pat
-      s0 <- getSubst
-      patBindings <- patternBindingsTyped (applySubst s0 scrutTy) pat
+      s' <- getSubst
+      patBindings <- patternBindingsTyped (applySubst s' scrutTy) pat
       let armEnv' = Map.union (Map.fromList patBindings) env'
       tbody <- inferExpr armEnv' body
       trest <- inferArms env' tscrut rest
@@ -399,8 +399,8 @@ inferExpr env (EMatch ExprAnn{pos = p} scrut arms) = do
 inferExpr _ (ECoerce ExprAnn{pos = p} _ _) = error $ "inferExpr: unexpected ECoerce at " <> show p
 inferExpr env (EVariadicSpread ExprAnn{pos = p} e) = do
   te <- inferExpr env e
-  s1 <- getSubst
-  case applySubst s1 (exprType te) of
+  s <- getSubst
+  case applySubst s (exprType te) of
     st@(TSlice _) -> return (EVariadicSpread ExprAnn { pos = p, ty = st, isStmt = False } te)
     t@(TNamed (Ident "opaque")) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te)
     t@(TVar _) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te) -- may resolve later
@@ -408,8 +408,8 @@ inferExpr env (EVariadicSpread ExprAnn{pos = p} e) = do
 inferExpr env (EApplication ExprAnn{pos = p} f args) = do
   tf <- inferExpr env f
   targs <- inferExprs env args
-  s2 <- getSubst
-  let fTy = applySubst s2 (exprType tf)
+  s <- getSubst
+  let fTy = applySubst s (exprType tf)
   case fTy of
     TFunc fixed mVar _ -> do
       -- `f ()` is ambiguous at parse time — EApplication f [EUnitLit] could mean:
@@ -448,8 +448,8 @@ inferExpr env (EApplication ExprAnn{pos = p} f args) = do
                       _ -> unifyM p (exprType arg) varTy) varArgs
             else return ()
       -- Use post-unification function type for accurate result type
-      s4 <- getSubst
-      resultTy <- lift (applyType p (applySubst s4 fTy) nSupplied)
+      s' <- getSubst
+      resultTy <- lift (applyType p (applySubst s' fTy) nSupplied)
       return (EApplication ExprAnn { pos = p, ty = resultTy, isStmt = True } tf targs)
     nt@(TNamed (Ident "opaque")) -> do
       resultTy <- lift (applyType p nt (length targs))
@@ -655,7 +655,7 @@ inferAndResolve expr = do
 
           -- Recurse into children.
           go (EIf a c th el) = EIf a (go c) (go th) (go el)
-          go (EMatch a scrut arms) = EMatch a (go scrut) (map goArm arms)
+          go (EMatch a scrut arms) = EMatch a (go scrut) (map (\(MatchArm p pat body) -> MatchArm p pat (go body)) arms)
           go (ESequence a es) = ESequence a (map go es)
           go (EInfixOp a e1 op e2) = EInfixOp a (go e1) op (go e2)
           go (EIndex a e idx) = EIndex a (go e) (go idx)
@@ -668,8 +668,6 @@ inferAndResolve expr = do
           go e@(EFloatLit {}) = e
           go e@(EStrLit {}) = e
           go e@(EMapLit {}) = e
-
-          goArm (MatchArm p pat body) = MatchArm p pat (go body)
 
           -- Coerce fixed args where param types disagree; pass variadic args through.
           coerceArgs (TFunc fixedTys _ _) args =

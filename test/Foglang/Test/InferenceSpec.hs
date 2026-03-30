@@ -61,6 +61,14 @@ isMissingSpread :: InferError -> Bool
 isMissingSpread (MissingSpread _ _) = True
 isMissingSpread _ = False
 
+isOccursIn :: InferError -> Bool
+isOccursIn (OccursIn _ _ _) = True
+isOccursIn _ = False
+
+isCannotInferType :: InferError -> Bool
+isCannotInferType (CannotInferType _) = True
+isCannotInferType _ = False
+
 -- Shorthand for common types
 intT :: TypeExpr
 intT = TNamed (Ident "int")
@@ -191,3 +199,45 @@ spec = describe "Inference" $ do
   describe "variadic spread" $ do
     it "spread slice into variadic succeeds" $
       inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1, 2, 3]\nf xs..." `shouldBe` Right (TNamed (Ident "()"))
+
+  describe "occurs check" $ do
+    it "self-referential function triggers OccursIn" $
+      inferResult "let f x = f\nf 1" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isOccursIn errs
+          Right _ -> False
+
+  describe "tuple patterns" $ do
+    it "tuple pattern binds variables" $ do
+      -- match against a Go multi-return (opaque), tuple pattern should infer
+      let src = "let m : map[string]int = {}\nlet x = m[\"key\"]\nmatch x with\n| (val, ok) => val"
+      inferResult src `shouldSatisfy` \r ->
+        case r of
+          Right _ -> True
+          Left _ -> False
+
+  describe "cons pattern on wrong type" $ do
+    it "cons pattern on int fails" $
+      inferResult "let x : int = 42\nmatch x with\n| h :: t => h\n| _ => 0" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isTypeMismatch errs
+          Right _ -> False
+
+  describe "variadic partial application" $ do
+    it "partial application of variadic function" $ do
+      let src = "let f (x : int) (args : ...int) => int = x\nlet g = f 1\ng 2 3"
+      inferType src `shouldBe` Right intT
+
+  describe "func arity mismatch unification" $ do
+    it "unifying functions with different param counts fails" $
+      inferResult "let f (g : (int => int)) = g 1\nlet h (x : int) (y : int) => int = x + y\nf h" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isTypeMismatch errs
+          Right _ -> False
+
+  describe "unconstrained function param" $ do
+    -- TODO: once fog has generics or removes blanket TVar->opaque defaulting,
+    -- this should become a CannotInferType error instead of defaulting to opaque.
+    it "unconstrained identity function defaults to opaque" $ do
+      let opaqueT = TNamed (Ident "opaque")
+      inferLetBindingType "let f x = x\nf" `shouldBe` Right (TFunc [opaqueT] Nothing opaqueT)
