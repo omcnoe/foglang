@@ -33,7 +33,7 @@ let abs_val (x : int) =
   else x
 
 // Slice literal with inferred element type
-let nums = [1, 2, 3]
+let nums = [1; 2; 3]
 
 // Index expression: infers int element from []int
 let first (xs : []int) = xs[0]

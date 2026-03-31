@@ -2,7 +2,7 @@
 
 ## Core concepts
 
-Foglang is indentation-sensitive. There are no braces or semicolons for delimiting blocks or statements. Instead, indentation determines program structure through a single core concept: **line-indent**.
+Foglang is indentation-sensitive. There are no braces for delimiting blocks. Instead, indentation determines program structure through a single core concept: **line-indent**.
 
 The **line-indent** of a construct is the column of the first non-whitespace character on the physical line where the construct starts. All indentation decisions are made relative to the line-indent:
 
@@ -12,7 +12,7 @@ The **line-indent** of a construct is the column of the first non-whitespace cha
 
 This rule applies uniformly at every nesting level - sequence items are children of their keyword, continuation lines are children of their expression. The same rule, applied recursively.
 
-A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression - it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body.
+A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression - it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body. Sequence body is separated by newlines. Inside delimiters (`()` and `[]`), semicolons can also separate sequence items — see [Semicolons](#semicolons).
 
 Sequences appear in these positions:
 
@@ -23,9 +23,9 @@ Sequences appear in these positions:
 - `if` condition (terminated by `then`)
 - `then` branch (terminated by `else` or dedent)
 - `else` branch
-- Inside `()`
+- Inside `()` (`;` valid separator in addition to newline)
 
-All parsed the same way. The only variation is what establishes the line-indent and what terminates the Sequence.
+All parsed the same way. The only variations are what establishes the line-indent, what terminates the Sequence, and whether `;` is a valid separator.
 
 ## The rules
 
@@ -182,4 +182,50 @@ let result : int = someFunction (
   let temp : int = compute 42
   temp * 2
 )
+```
+
+### Semicolons
+
+Semicolons (`;`) are item separators that work **only inside delimiters** — parentheses `()` and brackets `[]`. Outside delimiters, bare sequences use newlines only.
+
+Inside parentheses, `;` separates items at the **paren's top-level sequence** — it never gets captured by inner constructs (let RHS, if branches, match arms). Those inner bodies always use newline-only separation internally. If you need multiple items in an inner body on one line, wrap them in nested parens.
+
+Inside brackets, `;` separates slice/array elements.
+
+```
+// Slice literals
+let xs : []int = [1; 2; 3]
+
+// Paren sequences with let continuation
+fmt.Println (let x : int = 10; x + 1)    // prints 11
+
+// Chained lets inside parens
+let result : int = (let a : int = 10; let b : int = a * 2; b + 1)
+
+// If expression with continuation
+let y : int = (if x > 0 then x else 0 - x; y + 1)
+
+// Multi-item match arm bodies
+match x with
+  | 0 => (fmt.Println "zero"; "zero")
+  | _ => (fmt.Println "other"; "other")
+
+// Mix semicolons and newlines inside parens
+let compute () => int = (
+  let a : int = 10; let b : int = 20
+  let c : int = a + b
+  c
+)
+
+// Newlines still work inside parens (unchanged from before)
+let compute2 () => int = (
+  let a : int = 10
+  let b : int = 20
+  let c : int = a + b
+  c
+)
+
+// Bare semicolons outside delimiters are NOT allowed:
+// let f () => int =
+//   fmt.Println "a"; 42   -- ERROR
 ```

@@ -10,7 +10,7 @@ let getIndex (xs : []int) (i : int) => () =
   fmt.Println xs[i]
 
 let main () => () =
-  let xs : []int = [10, 20, 30]
+  let xs : []int = [10; 20; 30]
   printLen xs
   getIndex xs 0
   getIndex xs 2

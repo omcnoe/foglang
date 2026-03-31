@@ -5,14 +5,14 @@ import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
 import Foglang.Parser (SC(..), scn)
-import Foglang.Parser.Expr (sequence')
+import Foglang.Parser.Expr (sequenceWithNewline)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, runParserT)
 import Text.Megaparsec.Pos (mkPos)
 
 -- Parse a fog expression string into an Expr.
 parseExpr :: T.Text -> Either String Expr
-parseExpr s = case evalState (runParserT (sequence' Nothing (mkPos 1) <* runSC scn <* eof) "test" s) 0 of
+parseExpr s = case evalState (runParserT (sequenceWithNewline Nothing (mkPos 1) <* runSC scn <* eof) "test" s) 0 of
   Left err -> Left (show err)
   Right expr -> Right expr
 
@@ -125,10 +125,10 @@ spec = describe "Inference" $ do
       inferType "let add x y = x + y + 1\nadd 2 3" `shouldBe` Right intT
 
     it "slice indexing" $
-      inferType "let first (xs : []int) = xs[0]\nfirst [1, 2, 3]" `shouldBe` Right intT
+      inferType "let first (xs : []int) = xs[0]\nfirst [1; 2; 3]" `shouldBe` Right intT
 
     it "slice literal element types unified" $
-      inferType "[1, 2, 3]" `shouldBe` Right (TSlice intT)
+      inferType "[1; 2; 3]" `shouldBe` Right (TSlice intT)
 
     it "recursive function" $ do
       let src = "let fib n =\n  if n < 2\n  then n\n  else fib (n - 1) + fib (n - 2)\nfib 10"
@@ -204,14 +204,14 @@ spec = describe "Inference" $ do
           Right _ -> False
 
     it "missing spread: bare slice passed to variadic without ..." $
-      inferResult "let f (args : ...int) => () = ()\nlet xs : []int = [1, 2, 3]\nf xs" `shouldSatisfy` \r ->
+      inferResult "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs" `shouldSatisfy` \r ->
         case r of
           Left errs -> any isMissingSpread errs
           Right _ -> False
 
   describe "variadic spread" $ do
     it "spread slice into variadic succeeds" $
-      inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1, 2, 3]\nf xs..." `shouldBe` Right (TNamed (Ident "()"))
+      inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs..." `shouldBe` Right (TNamed (Ident "()"))
 
   describe "occurs check" $ do
     it "self-referential function triggers OccursIn" $

@@ -145,6 +145,50 @@ func seqBody() int {
 	fmt.Println("computing")
 	return 42
 }
+func seqSemicolon() int {
+	fmt.Println("a")
+	fmt.Println("b")
+	return 42
+}
+func seqSemicolonLet() int {
+	x := 10
+	_ = x
+	return (x + 1)
+}
+func seqMixed() int {
+	fmt.Println("a")
+	fmt.Println("b")
+	fmt.Println("c")
+	fmt.Println("d")
+	return 42
+}
+func seqSemiBranch(x int) int {
+	if x > 0 {
+		fmt.Println("positive")
+		return x
+	} else {
+		fmt.Println("non-positive")
+		return (0 - x)
+	}
+}
+func seqSemiMatch(x int) string {
+	_scrut1 := x
+	_ = _scrut1
+	if _scrut1 == 0 {
+		fmt.Println("zero")
+		return "zero"
+	} else {
+		fmt.Println("other")
+		return "other"
+	}
+}
+func seqSemiNested() int {
+	x := 1
+	_ = x
+	y := 2
+	_ = y
+	return (x + y)
+}
 func seqBranch(x int) int {
 	if x > 0 {
 		fmt.Println("positive")
@@ -305,6 +349,14 @@ func main() {
 	fmt.Println(matchPipeNoLHS(1))
 	fmt.Println(matchPipeNoLHS(42))
 	fmt.Println(seqBody())
+	fmt.Println(seqSemicolon())
+	fmt.Println(seqSemicolonLet())
+	fmt.Println(seqMixed())
+	fmt.Println(seqSemiBranch(5))
+	fmt.Println(seqSemiBranch((0 - 3)))
+	fmt.Println(seqSemiMatch(0))
+	fmt.Println(seqSemiMatch(42))
+	fmt.Println(seqSemiNested())
 	fmt.Println(seqBranch(5))
 	fmt.Println(seqBranch((0 - 3)))
 	fmt.Println(elseIfChain(1))

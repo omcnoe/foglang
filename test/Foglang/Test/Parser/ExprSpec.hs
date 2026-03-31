@@ -4,7 +4,7 @@ import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
 import Foglang.Parser (SC(..), scn)
-import Foglang.Parser.Expr (sequence')
+import Foglang.Parser.Expr (sequenceWithNewline)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof, runParserT)
 import Text.Megaparsec.Pos (initialPos, mkPos)
@@ -214,7 +214,7 @@ spec = do
           )
         ]
 
-  let parseExpr s = evalState (runParserT (sequence' Nothing (mkPos 1) <* runSC scn <* eof) "ExprSpec.hs" s) 0
+  let parseExpr s = evalState (runParserT (sequenceWithNewline Nothing (mkPos 1) <* runSC scn <* eof) "ExprSpec.hs" s) 0
 
   describe "sequence parses" $ do
     it "let" $

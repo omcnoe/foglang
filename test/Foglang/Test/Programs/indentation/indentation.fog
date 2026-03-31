@@ -199,6 +199,36 @@ let seqBody () => int =
   fmt.Println "computing"
   42
 
+// --- Semicolons inside parens as sequence item separators ---
+let seqSemicolon () => int =
+  (fmt.Println "a"; fmt.Println "b"; 42)
+
+// --- Semicolons with let binding continuation (inside parens) ---
+let seqSemicolonLet () => int =
+  (let x : int = 10; x + 1)
+
+// --- Mixed: semicolons and newlines inside parens ---
+let seqMixed () => int = (
+  fmt.Println "a"; fmt.Println "b"
+  fmt.Println "c"; fmt.Println "d"
+  42
+)
+
+// --- Semicolons in then/else branches (parens delimit) ---
+let seqSemiBranch (x : int) => int =
+  if x > 0 then (fmt.Println "positive"; x)
+  else (fmt.Println "non-positive"; 0 - x)
+
+// --- Semicolons in match arm bodies (parens delimit) ---
+let seqSemiMatch (x : int) => string =
+  match x with
+    | 0 => (fmt.Println "zero"; "zero")
+    | _ => (fmt.Println "other"; "other")
+
+// --- Nested lets with semicolons (inside parens) ---
+let seqSemiNested () => int =
+  (let x : int = 1; let y : int = 2; x + y)
+
 // --- Sequence in then/else branches ---
 let seqBranch (x : int) => int =
   if x > 0 then
@@ -208,11 +238,10 @@ let seqBranch (x : int) => int =
     fmt.Println "non-positive"
     0 - x
 
-// --- Sequence in if condition ---
+// --- Sequence in if condition (requires parens around let-in-condition) ---
 let seqCond (x : int) => int =
-  if
-    let positive : bool = x > 0
-    positive
+  if (let positive : bool = x > 0
+      positive)
   then x
   else 0 - x
 
@@ -235,15 +264,13 @@ let elseIfSeq (x : int) => int =
     fmt.Println "negative"
     0 - x
 
-// --- else if with Sequence conditions ---
+// --- else if with Sequence conditions (requires parens around let-in-condition) ---
 let elseIfSeqCond (x : int) => string =
-  if
-    let big : bool = x > 100
-    big
+  if (let big : bool = x > 100
+      big)
   then "big"
-  else if
-    let medium : bool = x > 10
-    medium
+  else if (let medium : bool = x > 10
+           medium)
   then "medium"
   else "small"
 
@@ -363,6 +390,14 @@ let main () => () =
 
   // Sequences as expressions
   fmt.Println (seqBody ())             // 42
+  fmt.Println (seqSemicolon ())        // 42
+  fmt.Println (seqSemicolonLet ())     // 11
+  fmt.Println (seqMixed ())            // 42
+  fmt.Println (seqSemiBranch 5)        // 5
+  fmt.Println (seqSemiBranch (0 - 3))  // 3
+  fmt.Println (seqSemiMatch 0)         // "zero"
+  fmt.Println (seqSemiMatch 42)        // "other"
+  fmt.Println (seqSemiNested ())       // 3
   fmt.Println (seqBranch 5)            // 5
   fmt.Println (seqBranch (0 - 3))      // 3
   fmt.Println (elseIfChain 1)          // "one"

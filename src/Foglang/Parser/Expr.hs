@@ -1,4 +1,4 @@
-module Foglang.Parser.Expr (sequence') where
+module Foglang.Parser.Expr (sequenceWithNewline) where
 
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
@@ -22,22 +22,40 @@ indentedScn :: Maybe LineIndent -> SC
 indentedScn Nothing = scn
 indentedScn (Just li) = SC $ indentGuard (runSC scn) GT (unLineIndent li) *> pure ()
 
+-- Sequence separator: newtype-wrapped to prevent accidentally threading an
+-- arbitrary parser where a sequence separator is expected (mirrors SC).
+newtype SeqSep = SeqSep { runSeqSep :: Parser () }
+
+-- Newline-only separator: items separated by indented newlines only.
+newlineSeqSep :: Maybe LineIndent -> SeqSep
+newlineSeqSep = SeqSep . runSC . indentedScn
+
+-- Semicolon-aware separator (for inside delimiters): items separated by `;`
+-- or by indented newlines.
+semiSeqSep :: Maybe LineIndent -> SeqSep
+semiSeqSep parentLi = SeqSep $
+  try (runSC scn *> string ";" *> runSC scn *> pure ())
+  <|> runSC (indentedScn parentLi)
+
 -- Core sequence parser: parses one or more expressions in order, with items
 -- at column > the parent's column. parentLi = Nothing for top-level
 -- or inside parens (no constraint). startLine = the line number of the
 -- introducing keyword, used to detect mid-line expressions.
-sequence' :: Maybe LineIndent -> Pos -> Parser Expr
-sequence' parentLi startLine = do
+sequenceWithNewline :: Maybe LineIndent -> Pos -> Parser Expr
+sequenceWithNewline parentLi startLine = sequenceWith (newlineSeqSep parentLi) parentLi startLine
+
+sequenceWith :: SeqSep -> Maybe LineIndent -> Pos -> Parser Expr
+sequenceWith seqSep parentLi startLine = do
   p <- getSourcePos
   case parentLi of
     Nothing -> pure ()
     Just li -> do
       let col = sourceColumn p
       when (col <= unLineIndent li) $ incorrectIndent GT (unLineIndent li) col
-  e <- sequenceItem parentLi startLine
+  e <- sequenceItemWith seqSep parentLi startLine
   es <- many $ try $ do
-    runSC (indentedScn parentLi)
-    sequenceItem parentLi startLine
+    runSeqSep seqSep
+    sequenceItemWith seqSep parentLi startLine
   case (e : es) of
     [x] -> return x
     xs -> do
@@ -51,15 +69,15 @@ sequence' parentLi startLine = do
 -- Computes the fold column for this item: if we're on a new line (past the
 -- start line), the item's own column defines the fold. If we're still on the
 -- start line (mid-line), inherit the parent's column.
-sequenceItem :: Maybe LineIndent -> Pos -> Parser Expr
-sequenceItem parentLi startLine = do
+sequenceItemWith :: SeqSep -> Maybe LineIndent -> Pos -> Parser Expr
+sequenceItemWith seqSep parentLi startLine = do
   p <- getSourcePos
   let col = sourceColumn p
       foldCol
         | sourceLine p > startLine = LineIndent col
         | Just li <- parentLi      = li
         | otherwise                = LineIndent col
-  try (letExpr parentLi foldCol) <|> lineFoldExpr foldCol
+  try (letExpr seqSep parentLi foldCol) <|> lineFoldExpr foldCol
 
 -- A line folded expression: parsed as a single logical line that may span
 -- multiple physical lines via indentation (line folding).
@@ -99,8 +117,8 @@ startsWithUnambiguousInfix = do
       , "<", ">", "*", "/", "%"
       ]
 
-letExpr :: Maybe LineIndent -> LineIndent -> Parser Expr
-letExpr parentLi letCol = do
+letExpr :: SeqSep -> Maybe LineIndent -> LineIndent -> Parser Expr
+letExpr seqSep parentLi letCol = do
   p <- getSourcePos
   let letLine = sourceLine p
   _ <- lexeme scn (keyword "let")
@@ -124,12 +142,17 @@ letExpr parentLi letCol = do
         Nothing -> freshTVar
   _ <- symbol scn "="
 
-  rhs <- sequence' (Just letCol) letLine
+  -- RHS is always a newline-only sequence (`;` does not separate RHS items).
+  -- This ensures that inside parens, `;` floats up to the paren-level
+  -- separator rather than being captured by the RHS.
+  rhs <- sequenceWithNewline (Just letCol) letLine
 
   seqPos <- getSourcePos
+  -- Continuation items use the enclosing separator: inside parens this
+  -- accepts `;`, outside parens it's newline-only.
   contItems <- many $ try $ do
-    runSC (indentedScn parentLi)
-    sequenceItem parentLi letLine
+    runSeqSep seqSep
+    sequenceItemWith seqSep parentLi letLine
   mtin <- case contItems of
         [] -> return Nothing
         [x] -> return (Just x)
@@ -166,7 +189,7 @@ matchArmBody matchCol = do
   _ <- symbol scn "|"
   pat <- pattern' scn
   _ <- symbol scn "=>"
-  body <- sequence' (Just matchCol) pipeLine
+  body <- sequenceWithNewline (Just matchCol) pipeLine
   return $ MatchArm p pat body
 
 
@@ -225,7 +248,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       _ <- string "("
       runSC scn
       parenLine <- sourceLine <$> getSourcePos
-      inner <- sequence' Nothing parenLine
+      inner <- sequenceWith (semiSeqSep Nothing) Nothing parenLine
       runSC scn
       _ <- string ")"
       withIndexSuffix inner
@@ -246,7 +269,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       -- line-indent = lineIndent (the physical line's leading indent, not
       -- the func token's column). This ensures mid-line func expressions
       -- (e.g. `let f = func (x) => () = ...`) scope correctly.
-      body <- try (runSC scn *> sequence' (Just lineIndent) funcLine) <|> exprWith sc' lineIndent
+      body <- try (runSC scn *> sequenceWithNewline (Just lineIndent) funcLine) <|> exprWith sc' lineIndent
       t <- freshTVar
       return $ ELambda ExprAnn { pos = p, ty = t, isStmt = False } (Binding ps typeAnno body)
 
@@ -270,7 +293,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     sliceLit = do
       p <- getSourcePos
       _ <- symbol' "["
-      exprs <- sepBy (exprWith sc' lineIndent) (symbol' ",")
+      exprs <- sepBy (exprWith sc' lineIndent) (symbol' ";")
       _ <- symbol' "]"
       t <- freshTVar
       return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } exprs
@@ -289,13 +312,13 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     parseIfChain :: SourcePos -> Pos -> Parser Expr
     parseIfChain p ifLine = do
       let lineIndentPos = unLineIndent lineIndent
-      cond <- sequence' (Just lineIndent) ifLine
+      cond <- exprWith sc' lineIndent
       runSC scn
       thenCol <- sourceColumn <$> getSourcePos
       when (thenCol < lineIndentPos) $ incorrectIndent GT (mkPos (unPos lineIndentPos - 1)) thenCol
       _ <- keyword "then"
       runSC scn
-      thenBranch <- sequence' (Just lineIndent) ifLine
+      thenBranch <- sequenceWithNewline (Just lineIndent) ifLine
       runSC scn
       elseCol <- sourceColumn <$> getSourcePos
       when (elseCol < lineIndentPos) $ incorrectIndent GT (mkPos (unPos lineIndentPos - 1)) elseCol
@@ -318,7 +341,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
               return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
             Nothing -> do
               t <- freshTVar
-              elseBranch <- sequence' (Just lineIndent) ifLine
+              elseBranch <- sequenceWithNewline (Just lineIndent) ifLine
               return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
 
     -- Parse an infix operator, ensuring it's not a prefix of a longer operator.
