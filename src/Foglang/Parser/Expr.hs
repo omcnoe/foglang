@@ -11,7 +11,7 @@ import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
 import Foglang.Parser.Types (params, typeExpr)
-import Text.Megaparsec (Pos, SourcePos, choice, getSourcePos, lookAhead, many, notFollowedBy, optional, satisfy, sepBy, some, try, unPos, (<|>))
+import Text.Megaparsec (Pos, SourcePos, choice, getSourcePos, lookAhead, many, notFollowedBy, optional, satisfy, some, try, unPos, (<|>))
 import Text.Megaparsec.Pos (sourceLine, sourceColumn)
 import Text.Megaparsec.Char (string)
 
@@ -142,7 +142,7 @@ startsWithUnambiguousInfix = do
       ]
 
 letExpr :: SeqSep -> LineIndent -> LineIndent -> Parser Expr
-letExpr seqSep parentLi letCol = do
+letExpr seqSep parentLi itemLi = do
   p <- getSourcePos
   let letLine = sourceLine p
   _ <- lexeme scn (keyword "let")
@@ -169,7 +169,7 @@ letExpr seqSep parentLi letCol = do
   -- RHS is always a newline-only sequence (`;` does not separate RHS items).
   -- This ensures that inside parens, `;` floats up to the paren-level
   -- separator rather than being captured by the RHS.
-  rhs <- sequenceWithNewline letCol letLine
+  rhs <- sequenceWithNewline itemLi letLine
 
   seqPos <- getSourcePos
   -- Continuation items use the enclosing separator: inside parens this
@@ -187,32 +187,32 @@ letExpr seqSep parentLi letCol = do
   t <- freshTVar
   return $ ELet ExprAnn { pos = p, ty = t, isStmt = True } name (Binding ps typeAnno rhs) mtin
 
--- Core match arm parser: accepts any arm at column >= the match's line-indent.
-matchArms :: LineIndent -> Parser [MatchArm]
-matchArms matchCol = do
-  col <- getCol
-  guardIndentGE matchCol col
-  firstArm <- matchArmBody matchCol
+-- Parse one or more match arms at column >= parentLi.
+matchArms :: LineIndent -> Pos -> Parser [MatchArm]
+matchArms parentLi matchLine = do
+  firstArm <- matchArm parentLi matchLine
   restArms <- many $ try $ do
     runSC scn
-    armCol <- getCol
-    guardIndentGE matchCol armCol
-    matchArmBody matchCol
+    matchArm parentLi matchLine
   return (firstArm : restArms)
 
 -- Parse a single arm: | pattern => body
--- The arm body is scoped to the match's line-indent, not the pipe's token
--- column. This is correct both when | is on its own line (line-indent
--- equals the match's) and when | is mid-line after "with" (the pipe's
--- column would be too high).
-matchArmBody :: LineIndent -> Parser MatchArm
-matchArmBody matchCol = do
+-- Guards that | is at column >= parentLi. The arm's line-indent scopes
+-- the body: own column on a new line, parentLi on the match line.
+matchArm :: LineIndent -> Pos -> Parser MatchArm
+matchArm parentLi matchLine = do
   p <- getSourcePos
-  let pipeLine = sourceLine p
+  col <- getCol
+  guardIndentGE parentLi col
+  let armLine = sourceLine p
+      armLi
+        | armLine > matchLine      = col
+        | LineIndent 0 == parentLi = col
+        | otherwise                = parentLi
   _ <- symbol scn "|"
   pat <- pattern' scn
   _ <- symbol scn "=>"
-  body <- sequenceWithNewline matchCol pipeLine
+  body <- sequenceWithNewline armLi armLine
   return $ MatchArm p pat body
 
 
@@ -305,23 +305,47 @@ exprWith sc' parentLineIndent lineIndent = makeExprParser atom operatorTable
     matchExpr :: Parser Expr
     matchExpr = do
       p <- getSourcePos
+      let matchLine = sourceLine p
       _ <- keyword' "match"
       scrut <- exprWith sc' parentLineIndent lineIndent
       runSC scn
       _ <- keyword "with"
       runSC scn
-      arms <- matchArms lineIndent
+      arms <- matchArms lineIndent matchLine
       t <- freshTVar
       return $ EMatch ExprAnn { pos = p, ty = t, isStmt = False } scrut arms
 
+    -- Slice literal: items are expressions (no let absorption), separated
+    -- by `;` or newlines. Same layout rules as parens (Option D).
     sliceLit :: Parser Expr
     sliceLit = do
       p <- getSourcePos
-      _ <- symbol' "["
-      exprs <- sepBy (exprWith sc' parentLineIndent lineIndent) (symbol' ";")
-      _ <- symbol' "]"
+      bracketLine <- sourceLine <$> getSourcePos
+      _ <- string "["
+      runSC scn
+
+      let sliceItem = do
+            line <- sourceLine <$> getSourcePos
+            col <- getCol
+            guardIndent parentLineIndent col
+            let foldCol
+                  | line > bracketLine               = col
+                  | LineIndent 0 == parentLineIndent = col
+                  | otherwise                        = parentLineIndent
+            lineFoldExpr parentLineIndent foldCol
+
+      mFirst <- optional sliceItem
+      items <- case mFirst of
+        Nothing -> pure []
+        Just first -> do
+          rest <- many $ try $ do
+            runSeqSep $ semiSeqSep parentLineIndent
+            sliceItem
+          return (first : rest)
+      runSC scn
+      _ <- string "]"
       t <- freshTVar
-      return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } exprs
+      return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } items
 
     -- If/then/else: condition, then-branch, and else-branch are each Sequences
     -- with line-indent = lineIndent (the physical line's leading indent).
@@ -346,27 +370,28 @@ exprWith sc' parentLineIndent lineIndent = makeExprParser atom operatorTable
       runSC scn
       elseCol <- getCol
       guardIndentGE lineIndent elseCol
+      elseBranch <- elseOrEmpty ifLine
+      t <- freshTVar
+      return $ EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch
+
+    elseOrEmpty :: Pos -> Parser Expr
+    elseOrEmpty ifLine = do
       mElse <- optional (keyword "else")
       case mElse of
         Nothing -> do
           seqPos <- getSourcePos
-          t1 <- freshTVar
-          t2 <- freshTVar
-          return (EIf ExprAnn { pos = p, ty = t1, isStmt = False } cond thenBranch (ESequence ExprAnn { pos = seqPos, ty = t2, isStmt = False } []))
+          t <- freshTVar
+          return $ ESequence ExprAnn { pos = seqPos, ty = t, isStmt = False } []
         Just _ -> do
           runSC scn
           mIf <- optional (keyword "if")
           case mIf of
             Just _ -> do
               runSC scn
-              t <- freshTVar
               elseIfPos <- getSourcePos
-              elseBranch <- parseIfChain elseIfPos ifLine
-              return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
-            Nothing -> do
-              t <- freshTVar
-              elseBranch <- sequenceWithNewline lineIndent ifLine
-              return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
+              parseIfChain elseIfPos ifLine
+            Nothing ->
+              sequenceWithNewline lineIndent ifLine
 
     -- Parse an infix operator, ensuring it's not a prefix of a longer operator.
     -- e.g. ">" must not match the start of ">=" or ">>>".
