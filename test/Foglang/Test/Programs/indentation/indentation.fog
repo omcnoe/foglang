@@ -240,8 +240,9 @@ let seqBranch (x : int) => int =
 
 // --- Sequence in if condition (requires parens around let-in-condition) ---
 let seqCond (x : int) => int =
-  if (let positive : bool = x > 0
-      positive)
+  if (
+    let positive : bool = x > 0
+    positive)
   then x
   else 0 - x
 
@@ -266,11 +267,9 @@ let elseIfSeq (x : int) => int =
 
 // --- else if with Sequence conditions (requires parens around let-in-condition) ---
 let elseIfSeqCond (x : int) => string =
-  if (let big : bool = x > 100
-      big)
+  if (let big : bool = x > 100; big)
   then "big"
-  else if (let medium : bool = x > 10
-           medium)
+  else if (let medium : bool = x > 10; medium)
   then "medium"
   else "small"
 
@@ -291,11 +290,11 @@ let seqArm (x : int) => int =
       n * 2
 
 // =============================================================================
-// PARENS RESET LAYOUT
-// Inside () and [], outer indentation constraints don't apply
+// PARENS: TRANSPARENT TO LAYOUT
+// Inside (), normal indentation rules apply unchanged
 // =============================================================================
 
-// --- Paren resets layout: content free from outer context ---
+// --- Paren groups expression: content follows normal indentation ---
 let parenReset : int =
   let f : (int => int) = (
     func (x : int) => int =
@@ -305,12 +304,12 @@ let parenReset : int =
 
 // --- Flat operator chains inside parens ---
 let parenFlat (a : bool) (b : bool) (c : bool) => bool = (
-a
-|| b
-|| c
+  a
+  || b
+  || c
 )
 
-// --- Nested parens: each resets independently ---
+// --- Nested parens ---
 let parenNest : int = (
   1 + (
     2 + 3

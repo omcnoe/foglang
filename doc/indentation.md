@@ -12,7 +12,7 @@ The **line-indent** of a construct is the column of the first non-whitespace cha
 
 This rule applies uniformly at every nesting level - sequence items are children of their keyword, continuation lines are children of their expression. The same rule, applied recursively.
 
-A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression - it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body. Sequence body is separated by newlines. Inside delimiters (`()` and `[]`), semicolons can also separate sequence items — see [Semicolons](#semicolons).
+A **Sequence** is the fundamental block construct: one or more expressions parsed in order, evaluating to the last. `Sequence` is itself an expression - it can appear anywhere an expression can. Anything that contains a Sequence is a "block header"; the Sequence is its body. Sequence body is separated by newlines. Inside delimiters (`()` and `[]`), semicolons can also separate sequence items - see [Semicolons](#semicolons).
 
 Sequences appear in these positions:
 
@@ -175,20 +175,25 @@ match xs with
 
 `( expression )`
 
-Parentheses reset the layout context. Inside, a fresh Sequence is parsed with the line-indent reset. The outer indentation constraints do not apply.
+Parentheses group expressions -- they do not affect indentation rules. The normal line-indent rules apply inside parens unchanged. The line-indent of the enclosing construct flows through transparently.
 
 ```
-let result : int = someFunction (
-  let temp : int = compute 42
-  temp * 2
-)
+let main () => () =
+  let result : int = (              - line-indent = col 3 (the inner "let" line)
+    let temp : int = compute 42     - col 5 > col 3 -> item in paren sequence
+    temp * 2                        - col 5 == col 5 -> sibling item
+  )
+  fmt.Println result
+
+let x : int = (func (y : int) => int =   - line-indent = col 1
+  7 * y)                                  - col 3 > col 1 -> func body
 ```
 
 ### Semicolons
 
-Semicolons (`;`) are item separators that work **only inside delimiters** — parentheses `()` and brackets `[]`. Outside delimiters, bare sequences use newlines only.
+Semicolons (`;`) are item separators that work **only inside delimiters** - parentheses `()` and brackets `[]`. Outside delimiters, bare sequences use newlines only.
 
-Inside parentheses, `;` separates items at the **paren's top-level sequence** — it never gets captured by inner constructs (let RHS, if branches, match arms). Those inner bodies always use newline-only separation internally. If you need multiple items in an inner body on one line, wrap them in nested parens.
+Inside parentheses, `;` separates items at the **paren's top-level sequence** - it never gets captured by inner constructs (let RHS, if branches, match arms). Those inner bodies always use newline-only separation internally. If you need multiple items in an inner body on one line, wrap them in nested parens.
 
 Inside brackets, `;` separates slice/array elements.
 

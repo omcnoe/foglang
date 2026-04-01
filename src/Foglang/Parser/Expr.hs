@@ -1,57 +1,82 @@
-module Foglang.Parser.Expr (sequenceWithNewline) where
+module Foglang.Parser.Expr (sequenceWithNewline, LineIndent(..)) where
 
 import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), pattern UnitType, exprPos, tsInt, tsFloat)
-import Foglang.Parser (Parser, SC(..), freshConstrained, freshTVar, keyword, lexeme, symbol, scn, LineIndent(..), unLineIndent)
-import Text.Megaparsec.Char.Lexer (incorrectIndent, indentGuard)
+import Foglang.Parser (Parser, SC(..), freshConstrained, freshTVar, keyword, lexeme, symbol, scn)
 import Foglang.Parser.Patterns (pattern')
 import Foglang.Parser.FloatLit (floatLit)
 import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
 import Foglang.Parser.Types (params, typeExpr)
-import Text.Megaparsec (Pos, SourcePos, choice, getSourcePos, lookAhead, many, mkPos, notFollowedBy, optional, satisfy, sepBy, some, try, unPos, (<|>))
+import Text.Megaparsec (Pos, SourcePos, choice, getSourcePos, lookAhead, many, notFollowedBy, optional, satisfy, sepBy, some, try, unPos, (<|>))
 import Text.Megaparsec.Pos (sourceLine, sourceColumn)
 import Text.Megaparsec.Char (string)
 
--- Consume whitespace between sequence items, enforcing indentation if a
--- parent column is set.
-indentedScn :: Maybe LineIndent -> SC
-indentedScn Nothing = scn
-indentedScn (Just li) = SC $ indentGuard (runSC scn) GT (unLineIndent li) *> pure ()
+-- The column of the first non-whitespace character on a physical line.
+-- Newtype-wrapped to prevent mistakenly passing value of a different type
+-- where a line-indent is expected (a common source of indentation bugs).
+-- Not using Megaparsec Pos) so that 0 can represent "top-level/no constraint"
+-- (col > 0 is always true since megaparsec columns start at 1).
+newtype LineIndent = LineIndent Int
+  deriving (Eq, Ord)
+
+getCol :: Parser LineIndent
+getCol = LineIndent . unPos . sourceColumn <$> getSourcePos
+
+-- Check that col > expected, fail with indentation error if not.
+guardIndent :: LineIndent -> LineIndent -> Parser ()
+guardIndent expected col =
+  when (col <= expected) $
+    let LineIndent e = expected; LineIndent a = col
+    in fail $ "incorrect indentation (got " ++ show a ++ ", should be greater than " ++ show e ++ ")"
+
+-- Check that col >= expected, fail with indentation error if not.
+guardIndentGE :: LineIndent -> LineIndent -> Parser ()
+guardIndentGE expected col =
+  when (col < expected) $
+    let LineIndent e = expected; LineIndent a = col
+    in fail $ "incorrect indentation (got " ++ show a ++ ", should be at least " ++ show e ++ ")"
+
+-- Consume whitespace between sequence items, enforcing that the next
+-- token's column is strictly greater than the parent line-indent.
+-- LineIndent 0 means "no constraint" (always passes).
+indentedScn :: LineIndent -> SC
+indentedScn (LineIndent 0) = scn
+indentedScn li = SC $ do
+  runSC scn
+  col <- getCol
+  guardIndent li col
 
 -- Sequence separator: newtype-wrapped to prevent accidentally threading an
 -- arbitrary parser where a sequence separator is expected (mirrors SC).
 newtype SeqSep = SeqSep { runSeqSep :: Parser () }
 
 -- Newline-only separator: items separated by indented newlines only.
-newlineSeqSep :: Maybe LineIndent -> SeqSep
+newlineSeqSep :: LineIndent -> SeqSep
 newlineSeqSep = SeqSep . runSC . indentedScn
 
 -- Semicolon-aware separator (for inside delimiters): items separated by `;`
 -- or by indented newlines.
-semiSeqSep :: Maybe LineIndent -> SeqSep
+semiSeqSep :: LineIndent -> SeqSep
 semiSeqSep parentLi = SeqSep $
   try (runSC scn *> string ";" *> runSC scn *> pure ())
   <|> runSC (indentedScn parentLi)
 
 -- Core sequence parser: parses one or more expressions in order, with items
--- at column > the parent's column. parentLi = Nothing for top-level
--- or inside parens (no constraint). startLine = the line number of the
--- introducing keyword, used to detect mid-line expressions.
-sequenceWithNewline :: Maybe LineIndent -> Pos -> Parser Expr
+-- at column > the parent's column. parentLi = LineIndent 0 for top-level
+-- (no constraint). startLine = the line number of the introducing keyword,
+-- used to detect mid-line expressions.
+sequenceWithNewline :: LineIndent -> Pos -> Parser Expr
 sequenceWithNewline parentLi startLine = sequenceWith (newlineSeqSep parentLi) parentLi startLine
 
-sequenceWith :: SeqSep -> Maybe LineIndent -> Pos -> Parser Expr
+sequenceWith :: SeqSep -> LineIndent -> Pos -> Parser Expr
 sequenceWith seqSep parentLi startLine = do
   p <- getSourcePos
-  case parentLi of
-    Nothing -> pure ()
-    Just li -> do
-      let col = sourceColumn p
-      when (col <= unLineIndent li) $ incorrectIndent GT (unLineIndent li) col
+  col <- getCol
+  guardIndent parentLi col
   e <- sequenceItemWith seqSep parentLi startLine
   es <- many $ try $ do
     runSeqSep seqSep
@@ -69,15 +94,15 @@ sequenceWith seqSep parentLi startLine = do
 -- Computes the fold column for this item: if we're on a new line (past the
 -- start line), the item's own column defines the fold. If we're still on the
 -- start line (mid-line), inherit the parent's column.
-sequenceItemWith :: SeqSep -> Maybe LineIndent -> Pos -> Parser Expr
+sequenceItemWith :: SeqSep -> LineIndent -> Pos -> Parser Expr
 sequenceItemWith seqSep parentLi startLine = do
-  p <- getSourcePos
-  let col = sourceColumn p
-      foldCol
-        | sourceLine p > startLine = LineIndent col
-        | Just li <- parentLi      = li
-        | otherwise                = LineIndent col
-  try (letExpr seqSep parentLi foldCol) <|> lineFoldExpr foldCol
+  line <- sourceLine <$> getSourcePos
+  col <- getCol
+  let foldCol
+        | line > startLine         = col
+        | LineIndent 0 == parentLi = col
+        | otherwise                = parentLi
+  try (letExpr seqSep parentLi foldCol) <|> lineFoldExpr parentLi foldCol
 
 -- A line folded expression: parsed as a single logical line that may span
 -- multiple physical lines via indentation (line folding).
@@ -86,18 +111,17 @@ sequenceItemWith seqSep parentLi startLine = do
 -- (a) the next token is indented past foldCol (Rule 1: child), OR
 -- (b) the next token is at foldCol AND starts with an unambiguously infix
 --     operator (Rule 2: same-column infix exception).
-lineFoldExpr :: LineIndent -> Parser Expr
-lineFoldExpr foldCol = do
-  let foldColPos = unLineIndent foldCol
-      sc' = SC $ try $ do
+lineFoldExpr :: LineIndent -> LineIndent -> Parser Expr
+lineFoldExpr parentLi foldCol = do
+  let sc' = SC $ try $ do
         runSC scn
-        col <- sourceColumn <$> getSourcePos
-        if col > foldColPos
+        col <- getCol
+        if col > foldCol
           then pure ()                      -- Rule 1: child (continuation)
-          else if col == foldColPos
-            then startsWithUnambiguousInfix  -- Rule 2: same-column infix exception
-            else fail "not a continuation line"
-  exprWith sc' foldCol
+        else if col == foldCol
+          then startsWithUnambiguousInfix  -- Rule 2: same-column infix exception
+          else fail "not a continuation line"
+  exprWith sc' parentLi foldCol
 
 -- Check (via lookAhead) that the next token starts with an unambiguously
 -- infix operator. These are operators that can ONLY be infix, never prefix.
@@ -117,7 +141,7 @@ startsWithUnambiguousInfix = do
       , "<", ">", "*", "/", "%"
       ]
 
-letExpr :: SeqSep -> Maybe LineIndent -> LineIndent -> Parser Expr
+letExpr :: SeqSep -> LineIndent -> LineIndent -> Parser Expr
 letExpr seqSep parentLi letCol = do
   p <- getSourcePos
   let letLine = sourceLine p
@@ -145,7 +169,7 @@ letExpr seqSep parentLi letCol = do
   -- RHS is always a newline-only sequence (`;` does not separate RHS items).
   -- This ensures that inside parens, `;` floats up to the paren-level
   -- separator rather than being captured by the RHS.
-  rhs <- sequenceWithNewline (Just letCol) letLine
+  rhs <- sequenceWithNewline letCol letLine
 
   seqPos <- getSourcePos
   -- Continuation items use the enclosing separator: inside parens this
@@ -166,14 +190,13 @@ letExpr seqSep parentLi letCol = do
 -- Core match arm parser: accepts any arm at column >= the match's line-indent.
 matchArms :: LineIndent -> Parser [MatchArm]
 matchArms matchCol = do
-  let matchColPos = unLineIndent matchCol
-  col <- sourceColumn <$> getSourcePos
-  when (col < matchColPos) $ incorrectIndent GT (mkPos (unPos matchColPos - 1)) col
+  col <- getCol
+  guardIndentGE matchCol col
   firstArm <- matchArmBody matchCol
   restArms <- many $ try $ do
     runSC scn
-    armCol <- sourceColumn <$> getSourcePos
-    when (armCol < matchColPos) $ incorrectIndent GT (mkPos (unPos matchColPos - 1)) armCol
+    armCol <- getCol
+    guardIndentGE matchCol armCol
     matchArmBody matchCol
   return (firstArm : restArms)
 
@@ -189,7 +212,7 @@ matchArmBody matchCol = do
   _ <- symbol scn "|"
   pat <- pattern' scn
   _ <- symbol scn "=>"
-  body <- sequenceWithNewline (Just matchCol) pipeLine
+  body <- sequenceWithNewline matchCol pipeLine
   return $ MatchArm p pat body
 
 
@@ -199,8 +222,8 @@ matchArmBody matchCol = do
 -- physical line where parsing started (from lineFoldExpr's foldCol).
 -- func/if/match use it for their body sequences instead of their own token
 -- column, so that mid-line constructs (e.g. `let x = if ...`) scope correctly.
-exprWith :: SC -> LineIndent -> Parser Expr
-exprWith sc' lineIndent = makeExprParser atom operatorTable
+exprWith :: SC -> LineIndent -> LineIndent -> Parser Expr
+exprWith sc' parentLineIndent lineIndent = makeExprParser atom operatorTable
   where
     -- Indentation aware versions of lexeme/symbol/keyword
     lexeme' :: Parser a -> Parser a
@@ -230,7 +253,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     -- Parse zero or more [expr] index suffixes, then consume trailing whitespace.
     withIndexSuffix :: Expr -> Parser Expr
     withIndexSuffix base = do
-      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> exprWith sc' lineIndent <* symbol' "]"; return (p, t, idx))
+      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> exprWith sc' parentLineIndent lineIndent <* symbol' "]"; return (p, t, idx))
       try (runSC sc') <|> pure ()
       return $ foldl (\b (p, t, idx) -> EIndex ExprAnn { pos = p, ty = t, isStmt = False } b idx) base idxs
 
@@ -243,12 +266,14 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       t <- freshTVar
       EVar ExprAnn { pos = p, ty = t, isStmt = False } <$> qualIdent >>= withIndexSuffix
 
+    -- Parens are transparent to layout (Option D): the enclosing parentLi
+    -- flows through unchanged. Normal line-indent rules apply inside.
     indexableParen :: Parser Expr
     indexableParen = do
+      parenLine <- sourceLine <$> getSourcePos
       _ <- string "("
       runSC scn
-      parenLine <- sourceLine <$> getSourcePos
-      inner <- sequenceWith (semiSeqSep Nothing) Nothing parenLine
+      inner <- sequenceWith (semiSeqSep parentLineIndent) parentLineIndent parenLine
       runSC scn
       _ <- string ")"
       withIndexSuffix inner
@@ -269,7 +294,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
       -- line-indent = lineIndent (the physical line's leading indent, not
       -- the func token's column). This ensures mid-line func expressions
       -- (e.g. `let f = func (x) => () = ...`) scope correctly.
-      body <- try (runSC scn *> sequenceWithNewline (Just lineIndent) funcLine) <|> exprWith sc' lineIndent
+      body <- try (runSC scn *> sequenceWithNewline lineIndent funcLine) <|> exprWith sc' parentLineIndent lineIndent
       t <- freshTVar
       return $ ELambda ExprAnn { pos = p, ty = t, isStmt = False } (Binding ps typeAnno body)
 
@@ -281,7 +306,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     matchExpr = do
       p <- getSourcePos
       _ <- keyword' "match"
-      scrut <- exprWith sc' lineIndent
+      scrut <- exprWith sc' parentLineIndent lineIndent
       runSC scn
       _ <- keyword "with"
       runSC scn
@@ -293,7 +318,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
     sliceLit = do
       p <- getSourcePos
       _ <- symbol' "["
-      exprs <- sepBy (exprWith sc' lineIndent) (symbol' ";")
+      exprs <- sepBy (exprWith sc' parentLineIndent lineIndent) (symbol' ";")
       _ <- symbol' "]"
       t <- freshTVar
       return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } exprs
@@ -311,17 +336,16 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
 
     parseIfChain :: SourcePos -> Pos -> Parser Expr
     parseIfChain p ifLine = do
-      let lineIndentPos = unLineIndent lineIndent
-      cond <- exprWith sc' lineIndent
+      cond <- exprWith sc' parentLineIndent lineIndent
       runSC scn
-      thenCol <- sourceColumn <$> getSourcePos
-      when (thenCol < lineIndentPos) $ incorrectIndent GT (mkPos (unPos lineIndentPos - 1)) thenCol
+      thenCol <- getCol
+      guardIndentGE lineIndent thenCol
       _ <- keyword "then"
       runSC scn
-      thenBranch <- sequenceWithNewline (Just lineIndent) ifLine
+      thenBranch <- sequenceWithNewline lineIndent ifLine
       runSC scn
-      elseCol <- sourceColumn <$> getSourcePos
-      when (elseCol < lineIndentPos) $ incorrectIndent GT (mkPos (unPos lineIndentPos - 1)) elseCol
+      elseCol <- getCol
+      guardIndentGE lineIndent elseCol
       mElse <- optional (keyword "else")
       case mElse of
         Nothing -> do
@@ -341,7 +365,7 @@ exprWith sc' lineIndent = makeExprParser atom operatorTable
               return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
             Nothing -> do
               t <- freshTVar
-              elseBranch <- sequenceWithNewline (Just lineIndent) ifLine
+              elseBranch <- sequenceWithNewline lineIndent ifLine
               return (EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch)
 
     -- Parse an infix operator, ensuring it's not a prefix of a longer operator.
