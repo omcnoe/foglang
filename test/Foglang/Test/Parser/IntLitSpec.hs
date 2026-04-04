@@ -1,11 +1,11 @@
 module Foglang.Test.Parser.IntLitSpec (spec) where
 
-import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (IntLit (..))
+import Foglang.Parser (runParse)
 import Foglang.Parser.IntLit (intLit)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, runParserT)
+import Text.Megaparsec (eof)
 
 spec :: Spec
 spec = do
@@ -46,7 +46,7 @@ spec = do
           "0X__0"
         ]
 
-  let parseIntLit s = evalState (runParserT (intLit <* eof) "IntLitSpec.hs" s) 0
+  let parseIntLit s = runParse (intLit <* eof) "IntLitSpec.hs" s
 
   describe "intLit parses" $ do
     it "go spec examples" $

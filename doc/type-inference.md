@@ -208,7 +208,7 @@ Codegen expects a fully resolved Expr tree with no TVars. After inference + solv
 
 ## State
 
-The parser maintains a `nextTVar :: Int` counter to generate unique TVar IDs. The parser type is `ParsecT Void Text (State Int)` - state as the inner monad so that TVar IDs do not backtrack. If a parse branch mints TVar 5 then fails, the next branch mints TVar 6, ensuring global uniqueness.
+The parser maintains a `nextTVar :: Int` counter to generate unique TVar IDs. The parser type is `ParsecT Void Text (ReaderT Env (State Int))`. State is the innermost monad, which means TVar IDs do not backtrack on parse failures (a failed branch that minted TVar 5 causes the next branch to mint TVar 6). This is harmless - IDs only need to be unique, not contiguous - but is incidental rather than intentional.
 
 Inference maintains a `substitution :: Map Int TypeExpr` - the solved TVars. This can be threaded explicitly through function arguments or wrapped in a State monad - they are equivalent.
 

@@ -1,101 +1,83 @@
 module Foglang.Parser.Types (params, typeExpr) where
 
 import Foglang.AST (Ident (..), Param (..), TypeExpr (..), pattern UnitType)
-import Foglang.Parser (Parser, SC, freshTVar, keyword, lexeme, symbol)
+import Foglang.Parser (Parser, freshTVar, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Text.Megaparsec (many, optional, try, (<|>))
 import Text.Megaparsec.Char (string)
 
--- Parse a function parameter:
---   () for unit,
---   (name : type) / (name : ...type) for typed/variadic,
---   (...) for redundant parens (recursive),
---   name for bare untyped (gets a fresh TVar).
-param :: SC -> Parser Param
-param sc' = unit <|> try typed <|> try parens <|> bare
+param :: Parser Param
+param = unit <|> try typed <|> try parens <|> bare
   where
-    unit = PUnit <$ symbol sc' "()"
+    unit = PUnit <$ symbol "()"
     typed = do
-      _ <- symbol sc' "("
-      name <- lexeme sc' ident
-      _ <- symbol sc' ":"
+      _ <- symbol "("
+      name <- lexeme ident
+      _ <- symbol ":"
       mVariadic <- optional (try (string "..."))
-      ty <- typeExpr sc'
-      _ <- symbol sc' ")"
+      ty <- typeExpr
+      _ <- symbol ")"
       return $ case mVariadic of
         Just _ -> PVariadic name ty
         Nothing -> PTyped name ty
     parens = do
-      _ <- symbol sc' "("
-      p <- param sc'
-      _ <- symbol sc' ")"
+      _ <- symbol "("
+      p <- param
+      _ <- symbol ")"
       return p
     bare = do
-      name <- lexeme sc' ident
+      name <- lexeme ident
       t <- freshTVar
       return $ PTyped name t
 
--- Parse a sequence of function parameters (zero or more), with optional '->'
--- separators between consecutive parameters. sc' controls whitespace/newline
--- consumption between tokens (use scn at block level, the linefold sc' inline).
-params :: SC -> Parser [Param]
-params sc' = do
-  firstParam <- optional (param sc')
+params :: Parser [Param]
+params = do
+  firstParam <- optional param
   restParams <- case firstParam of
     Nothing -> return []
-    Just _ -> many $ optional (symbol sc' "->") *> param sc'
+    Just _ -> many $ optional (symbol "->") *> param
   return $ maybe [] (: restParams) firstParam
 
--- Type expression parameterised on a space consumer. sc' controls how far
--- whitespace is consumed between tokens — use scn at block level, the linefold
--- sc' inline. This ensures type expressions respect line fold indentation.
-typeExpr :: SC -> Parser TypeExpr
-typeExpr sc' =
-  try (mapTypeExpr sc')
-    <|> try (sliceTypeExpr sc')
-    <|> try (TNamed (Ident "struct{}") <$ lexeme sc' (string "struct{}"))
-    <|> try (UnitType <$ lexeme sc' (string "()"))
-    <|> try (TNamed <$> lexeme sc' ident)
-    <|> funcTypeExpr sc'
+typeExpr :: Parser TypeExpr
+typeExpr =
+  try mapTypeExpr
+    <|> try sliceTypeExpr
+    <|> try (TNamed (Ident "struct{}") <$ lexeme (string "struct{}"))
+    <|> try (UnitType <$ lexeme (string "()"))
+    <|> try (TNamed <$> lexeme ident)
+    <|> funcTypeExpr
 
--- map[K]V type — spaces allowed between tokens, respecting the space consumer.
-mapTypeExpr :: SC -> Parser TypeExpr
-mapTypeExpr sc' = do
-  _ <- lexeme sc' (keyword "map")
-  _ <- symbol sc' "["
-  keyTy <- typeExpr sc'
-  _ <- symbol sc' "]"
-  valTy <- typeExpr sc'
+mapTypeExpr :: Parser TypeExpr
+mapTypeExpr = do
+  _ <- keyword "map"
+  _ <- symbol "["
+  keyTy <- typeExpr
+  _ <- symbol "]"
+  valTy <- typeExpr
   return $ TMap keyTy valTy
 
--- []T slice type (distinct from ...T variadic).
-sliceTypeExpr :: SC -> Parser TypeExpr
-sliceTypeExpr sc' = do
-  _ <- symbol sc' "["
-  _ <- symbol sc' "]"
-  TSlice <$> typeExpr sc'
+sliceTypeExpr :: Parser TypeExpr
+sliceTypeExpr = do
+  _ <- symbol "["
+  _ <- symbol "]"
+  TSlice <$> typeExpr
 
--- Parenthesised function type: (T1 -> T2 => Tr)
--- or variadic:                 (T1 -> ...Tv => Tr)
--- or zero-param:               (() => Tr)
-funcTypeExpr :: SC -> Parser TypeExpr
-funcTypeExpr sc' = do
-  _ <- symbol sc' "("
-  -- Check for zero-param form: after consuming "(", see if next is "() =>"
-  mZero <- optional (try (symbol sc' "()" >> symbol sc' "=>"))
+funcTypeExpr :: Parser TypeExpr
+funcTypeExpr = do
+  _ <- symbol "("
+  mZero <- optional (try (symbol "()" >> symbol "=>"))
   case mZero of
     Just _ -> do
-      retTy <- typeExpr sc'
-      _ <- symbol sc' ")"
+      retTy <- typeExpr
+      _ <- symbol ")"
       return $ TFunc [UnitType] Nothing retTy
     Nothing -> do
-      -- Parse fixed params, then check for variadic ...T before =>
-      fixedTys <- many (try (typeExpr sc' <* optional (symbol sc' "->")))
-      mVarTy <- optional (try (string "..." *> typeExpr sc'))
+      fixedTys <- many (try (typeExpr <* optional (symbol "->")))
+      mVarTy <- optional (try (string "..." *> typeExpr))
       case (fixedTys, mVarTy) of
         ([], Nothing) -> fail "function type with no parameters"
         _ -> do
-          _ <- symbol sc' "=>"
-          retTy <- typeExpr sc'
-          _ <- symbol sc' ")"
+          _ <- symbol "=>"
+          retTy <- typeExpr
+          _ <- symbol ")"
           return $ TFunc fixedTys mVarTy retTy

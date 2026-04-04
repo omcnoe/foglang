@@ -1,11 +1,11 @@
 module Foglang.Test.Parser.FloatLitSpec (spec) where
 
-import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (FloatLit (..))
+import Foglang.Parser (runParse)
 import Foglang.Parser.FloatLit (floatLit)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, runParserT)
+import Text.Megaparsec (eof)
 
 spec :: Spec
 spec = do
@@ -40,7 +40,7 @@ spec = do
           "1.5e1_" --    invalid: _ must separate successive digits
         ]
 
-  let parseFloatLit s = evalState (runParserT (floatLit <* eof) "FloatLitSpec.hs" s) 0
+  let parseFloatLit s = runParse (floatLit <* eof) "FloatLitSpec.hs" s
 
   describe "floatLit parses" $ do
     it "go spec examples" $

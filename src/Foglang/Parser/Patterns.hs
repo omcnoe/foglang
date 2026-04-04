@@ -1,40 +1,40 @@
 module Foglang.Parser.Patterns (pattern') where
 
 import Foglang.AST (Pattern (..))
-import Foglang.Parser (Parser, SC, keyword, lexeme, symbol)
+import Foglang.Parser (Parser, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
 import Text.Megaparsec (sepBy1, try, (<|>))
 
-pattern' :: SC -> Parser Pattern
-pattern' sc' =
-  try (consPattern sc')
-    <|> try (tuplePattern sc')
-    <|> atomicPattern sc'
+pattern' :: Parser Pattern
+pattern' =
+  try consPattern
+    <|> try tuplePattern
+    <|> atomicPattern
 
-consPattern :: SC -> Parser Pattern
-consPattern sc' = do
-  hd <- try (tuplePattern sc') <|> atomicPattern sc'
-  _ <- symbol sc' "::"
-  tl <- pattern' sc'
+consPattern :: Parser Pattern
+consPattern = do
+  hd <- try tuplePattern <|> atomicPattern
+  _ <- symbol "::"
+  tl <- pattern'
   return $ PtCons hd tl
 
-atomicPattern :: SC -> Parser Pattern
-atomicPattern sc' =
-  try (PtSliceEmpty <$ symbol sc' "[]")
-    <|> (PtBoolLit True <$ lexeme sc' (keyword "true"))
-    <|> (PtBoolLit False <$ lexeme sc' (keyword "false"))
-    <|> try (PtIntLit <$> lexeme sc' intLit)
-    <|> try (PtStrLit <$> lexeme sc' stringLit)
-    <|> try (PtWildcard <$ lexeme sc' (keyword "_"))
-    <|> (PtVar <$> lexeme sc' ident)
+atomicPattern :: Parser Pattern
+atomicPattern =
+  try (PtSliceEmpty <$ symbol "[]")
+    <|> (PtBoolLit True <$ keyword "true")
+    <|> (PtBoolLit False <$ keyword "false")
+    <|> try (PtIntLit <$> lexeme intLit)
+    <|> try (PtStrLit <$> lexeme stringLit)
+    <|> try (PtWildcard <$ keyword "_")
+    <|> (PtVar <$> lexeme ident)
 
-tuplePattern :: SC -> Parser Pattern
-tuplePattern sc' = do
-  _ <- symbol sc' "("
-  first <- pattern' sc'
-  _ <- symbol sc' ","
-  rest <- sepBy1 (pattern' sc') (symbol sc' ",")
-  _ <- symbol sc' ")"
+tuplePattern :: Parser Pattern
+tuplePattern = do
+  _ <- symbol "("
+  first <- pattern'
+  _ <- symbol ","
+  rest <- sepBy1 pattern' (symbol ",")
+  _ <- symbol ")"
   return $ PtTuple (first : rest)

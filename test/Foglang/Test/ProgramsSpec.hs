@@ -1,19 +1,19 @@
 module Foglang.Test.ProgramsSpec (spec) where
 
-import Control.Monad.State.Strict (evalState)
 import Data.FileEmbed (embedStringFile)
 import Data.Text qualified as T
 import Data.Void (Void)
 import Foglang.Codegen (genGoFile)
+import Foglang.Parser (runParse)
 import Foglang.Parser.FogFile (fogFile)
 import Foglang.Test.Util (shouldParseAndCodegenTo)
 import Test.Hspec (Spec, describe, it)
-import Text.Megaparsec (ParseErrorBundle, eof, runParserT)
+import Text.Megaparsec (ParseErrorBundle, eof)
 
 import Foglang.AST (FogFile)
 
 runFogParser :: String -> T.Text -> Either (ParseErrorBundle T.Text Void) FogFile
-runFogParser path src = evalState (runParserT (fogFile <* eof) path src) 0
+runFogParser path src = runParse (fogFile <* eof) path src
 
 fibonacciFogSrc :: T.Text
 fibonacciFogSrc = T.pack $(embedStringFile "test/Foglang/Test/Programs/fibonacci/fibonacci.fog")

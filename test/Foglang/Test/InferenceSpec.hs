@@ -1,18 +1,16 @@
 module Foglang.Test.InferenceSpec (spec) where
 
-import Control.Monad.State.Strict (evalState)
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
-import Foglang.Parser (SC(..), scn)
-import Foglang.Parser.Expr (sequenceWithNewline, LineIndent(..))
+import Foglang.Parser (SC(..), runParse, scn)
+import Foglang.Parser.Expr (childBlock)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, runParserT)
-import Text.Megaparsec.Pos (mkPos)
+import Text.Megaparsec (eof)
 
 -- Parse a fog expression string into an Expr.
 parseExpr :: T.Text -> Either String Expr
-parseExpr s = case evalState (runParserT (sequenceWithNewline (LineIndent 0) (mkPos 1) <* runSC scn <* eof) "test" s) 0 of
+parseExpr s = case runParse (childBlock <* runSC scn <* eof) "test" s of
   Left err -> Left (show err)
   Right expr -> Right expr
 

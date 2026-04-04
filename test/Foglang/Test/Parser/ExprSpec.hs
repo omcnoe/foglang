@@ -1,13 +1,12 @@
 module Foglang.Test.Parser.ExprSpec (spec) where
 
-import Control.Monad.State.Strict (evalState)
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
-import Foglang.Parser (SC(..), scn)
-import Foglang.Parser.Expr (sequenceWithNewline, LineIndent(..))
+import Foglang.Parser (SC(..), runParse, scn)
+import Foglang.Parser.Expr (childBlock)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
-import Text.Megaparsec (eof, runParserT)
-import Text.Megaparsec.Pos (initialPos, mkPos)
+import Text.Megaparsec (eof)
+import Text.Megaparsec.Pos (initialPos)
 
 -- Dummy annotation for test expected values (matches what stripPos normalizes to).
 a :: ExprAnn
@@ -169,6 +168,31 @@ spec = do
           "if x 1 else 2"
         ]
 
+  -- childBlock inside continuations should anchor to the
+  -- continuation's column, not the enclosing fold's envFoldCol.
+  let invalidIfIndent =
+        [ -- body at col 4, if at col 5 -> body not indented past if
+          "let x =\n\
+          \  y +\n\
+          \    if cond\n\
+          \    then\n\
+          \   body",
+          -- body at same col as if (col 5) -> still not indented past if
+          "let x =\n\
+          \  y +\n\
+          \    if cond\n\
+          \    then\n\
+          \    body",
+          -- else branch body under-indented
+          "let x =\n\
+          \  y +\n\
+          \    if cond\n\
+          \    then\n\
+          \      1\n\
+          \    else\n\
+          \   body"
+        ]
+
   let validParen =
         [ ("(1)", EIntLit a (IntDecimal "1")),
           ("(x)", EVar a "x"),
@@ -177,6 +201,18 @@ spec = do
               (EInfixOp a (EIntLit a (IntDecimal "1")) "+" (EIntLit a (IntDecimal "2")))
               "*"
               (EIntLit a (IntDecimal "3"))
+          ),
+          -- Semicolons separate items inside parens
+          ( "(1; 2)",
+            ESequence a [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2")]
+          ),
+          -- Let inside parens: semicolon separates let from in-expression
+          ( "(let x = 1; x)",
+            ELet a "x" (Binding [] (ty a) (EIntLit a (IntDecimal "1"))) (Just (EVar a "x"))
+          ),
+          -- Let RHS doesn't absorb semicolon
+          ( "(let x = 1 + 2; x)",
+            ELet a "x" (Binding [] (ty a) (EInfixOp a (EIntLit a (IntDecimal "1")) "+" (EIntLit a (IntDecimal "2")))) (Just (EVar a "x"))
           )
         ]
 
@@ -214,7 +250,7 @@ spec = do
           )
         ]
 
-  let parseExpr s = evalState (runParserT (sequenceWithNewline (LineIndent 0) (mkPos 1) <* runSC scn <* eof) "ExprSpec.hs" s) 0
+  let parseExpr s = runParse (childBlock <* runSC scn <* eof) "ExprSpec.hs" s
 
   describe "sequence parses" $ do
     it "let" $
@@ -239,3 +275,5 @@ spec = do
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEIf
     it "invalid paren" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
+    it "under-indented if/then/else body" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIfIndent

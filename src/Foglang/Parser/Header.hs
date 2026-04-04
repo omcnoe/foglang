@@ -3,7 +3,7 @@ module Foglang.Parser.Header (header) where
 import Data.Char (isPrint, isSpace)
 import Data.Text qualified as T
 import Foglang.AST (Header (..), Ident (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
-import Foglang.Parser (Parser, keyword, lexeme, scn, symbol)
+import Foglang.Parser (Parser, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Text.Megaparsec (between, many, takeWhileP, try, (<|>))
 import Text.Megaparsec.Char (char)
@@ -11,10 +11,10 @@ import Text.Megaparsec.Char (char)
 import' :: Parser ImportDecl
 import' = do
   alias <-
-    (Dot <$ symbol scn ".")
-      <|> try (toAlias <$> lexeme scn ident)
+    (Dot <$ symbol ".")
+      <|> try (toAlias <$> lexeme ident)
       <|> return Default
-  path <- lexeme scn $ do
+  path <- lexeme $ do
     _ <- char '"'
     path <- takeWhileP Nothing (/= '"')
     _ <- char '"'
@@ -24,8 +24,6 @@ import' = do
     toAlias (Ident "_") = Blank
     toAlias i = Alias i
 
-    -- Validate an import path per Go compiler impl:
-    -- must be non-empty, printable, non-space, no illegal characters.
     validateImportPath :: T.Text -> Parser T.Text
     validateImportPath path
       | T.null path = fail "empty import path"
@@ -37,17 +35,17 @@ import' = do
         illegalChars = "!\"#$%&'()*,:;<=>?[\\]^`{|}\xFFFD"
 
 groupedImports :: Parser [ImportDecl]
-groupedImports = between (symbol scn "(") (symbol scn ")") (many import')
+groupedImports = between (symbol "(") (symbol ")") (many import')
 
 importDecl :: Parser [ImportDecl]
 importDecl = do
-  _ <- lexeme scn (keyword "import")
+  _ <- keyword "import"
   (: []) <$> import' <|> groupedImports
 
 packageClause :: Parser PackageClause
 packageClause = do
-  _ <- lexeme scn (keyword "package")
-  PackageClause <$> lexeme scn ident
+  _ <- keyword "package"
+  PackageClause <$> lexeme ident
 
 header :: Parser Header
 header = do

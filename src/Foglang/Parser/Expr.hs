@@ -1,432 +1,289 @@
-module Foglang.Parser.Expr (sequenceWithNewline, LineIndent(..)) where
+module Foglang.Parser.Expr (childBlock) where
 
-import Control.Monad (when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
+import Control.Monad.Reader (asks)
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), pattern UnitType, exprPos, tsInt, tsFloat)
-import Foglang.Parser (Parser, SC(..), freshConstrained, freshTVar, keyword, lexeme, symbol, scn)
-import Foglang.Parser.Patterns (pattern')
+import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), TypeExpr (..), exprPos, tsFloat, tsInt, pattern UnitType)
+import Foglang.Parser
 import Foglang.Parser.FloatLit (floatLit)
 import Foglang.Parser.Ident (ident, qualIdent)
 import Foglang.Parser.IntLit (intLit)
+import Foglang.Parser.Patterns (pattern')
 import Foglang.Parser.StringLit (stringLit)
 import Foglang.Parser.Types (params, typeExpr)
-import Text.Megaparsec (Pos, SourcePos, choice, getSourcePos, lookAhead, many, notFollowedBy, optional, satisfy, some, try, unPos, (<|>))
-import Text.Megaparsec.Pos (sourceLine, sourceColumn)
+import Text.Megaparsec (Pos, SourcePos, getSourcePos, many, optional, some, try, (<|>))
 import Text.Megaparsec.Char (string)
+import Text.Megaparsec.Pos (sourceLine)
 
--- The column of the first non-whitespace character on a physical line.
--- Newtype-wrapped to prevent mistakenly passing value of a different type
--- where a line-indent is expected (a common source of indentation bugs).
--- Not using Megaparsec Pos) so that 0 can represent "top-level/no constraint"
--- (col > 0 is always true since megaparsec columns start at 1).
-newtype LineIndent = LineIndent Int
-  deriving (Eq, Ord)
-
-getCol :: Parser LineIndent
-getCol = LineIndent . unPos . sourceColumn <$> getSourcePos
-
--- Check that col > expected, fail with indentation error if not.
-guardIndent :: LineIndent -> LineIndent -> Parser ()
-guardIndent expected col =
-  when (col <= expected) $
-    let LineIndent e = expected; LineIndent a = col
-    in fail $ "incorrect indentation (got " ++ show a ++ ", should be greater than " ++ show e ++ ")"
-
--- Check that col >= expected, fail with indentation error if not.
-guardIndentGE :: LineIndent -> LineIndent -> Parser ()
-guardIndentGE expected col =
-  when (col < expected) $
-    let LineIndent e = expected; LineIndent a = col
-    in fail $ "incorrect indentation (got " ++ show a ++ ", should be at least " ++ show e ++ ")"
-
--- Consume whitespace between sequence items, enforcing that the next
--- token's column is strictly greater than the parent line-indent.
--- LineIndent 0 means "no constraint" (always passes).
-indentedScn :: LineIndent -> SC
-indentedScn (LineIndent 0) = scn
-indentedScn li = SC $ do
-  runSC scn
+-- | Child block: indented (col > envFoldCol), newline-only sequence of items.
+-- Resets envSemi to False - semicolons don't penetrate into sub-blocks.
+childBlock :: Parser Expr
+childBlock = do
+  foldCol <- asks envFoldCol
   col <- getCol
-  guardIndent li col
+  guardColGT col foldCol
+  withoutSemicolons exprSequence
 
--- Sequence separator: newtype-wrapped to prevent accidentally threading an
--- arbitrary parser where a sequence separator is expected (mirrors SC).
-newtype SeqSep = SeqSep { runSeqSep :: Parser () }
+-- | Parse one or more items. Subsequent items are continuations
+-- at the same indent as the first item. Each item is either a let
+-- (which absorbs continuation) or a folded expression.
+exprSequence :: Parser Expr
+exprSequence = do
+  let item = do
+        foldCol <- resolveFoldCol
+        itemLine <- sourceLine <$> getSourcePos
+        try (letExpr foldCol) <|> foldExpr foldCol itemLine
 
--- Newline-only separator: items separated by indented newlines only.
-newlineSeqSep :: LineIndent -> SeqSep
-newlineSeqSep = SeqSep . runSC . indentedScn
-
--- Semicolon-aware separator (for inside delimiters): items separated by `;`
--- or by indented newlines.
-semiSeqSep :: LineIndent -> SeqSep
-semiSeqSep parentLi = SeqSep $
-  try (runSC scn *> string ";" *> runSC scn *> pure ())
-  <|> runSC (indentedScn parentLi)
-
--- Core sequence parser: parses one or more expressions in order, with items
--- at column > the parent's column. parentLi = LineIndent 0 for top-level
--- (no constraint). startLine = the line number of the introducing keyword,
--- used to detect mid-line expressions.
-sequenceWithNewline :: LineIndent -> Pos -> Parser Expr
-sequenceWithNewline parentLi startLine = sequenceWith (newlineSeqSep parentLi) parentLi startLine
-
-sequenceWith :: SeqSep -> LineIndent -> Pos -> Parser Expr
-sequenceWith seqSep parentLi startLine = do
   p <- getSourcePos
-  col <- getCol
-  guardIndent parentLi col
-  e <- sequenceItemWith seqSep parentLi startLine
-  es <- many $ try $ do
-    runSeqSep seqSep
-    sequenceItemWith seqSep parentLi startLine
+  itemLi <- getCol
+  e <- item
+  es <- many $ try $ continuation itemLi item
   case (e : es) of
     [x] -> return x
     xs -> do
       t <- freshTVar
-      return $ ESequence ExprAnn { pos = p, ty = t, isStmt = False } xs
+      return $ ESequence ExprAnn {pos = p, ty = t, isStmt = False} xs
 
--- A sequence item is either:
--- a let binding (which absorbs any subsequent expressions as its in-expression)
--- a line-folded expression
+-- | A folded expression: enter a fold context, parse an expression.
+foldExpr :: LineIndent -> Pos -> Parser Expr
+foldExpr foldCol startLine = fold foldCol startLine expr
+
+-- ----------------------------------------------------------------------------
+-- Let
 --
--- Computes the fold column for this item: if we're on a new line (past the
--- start line), the item's own column defines the fold. If we're still on the
--- start line (mid-line), inherit the parent's column.
-sequenceItemWith :: SeqSep -> LineIndent -> Pos -> Parser Expr
-sequenceItemWith seqSep parentLi startLine = do
-  line <- sourceLine <$> getSourcePos
-  col <- getCol
-  let foldCol
-        | line > startLine         = col
-        | LineIndent 0 == parentLi = col
-        | otherwise                = parentLi
-  try (letExpr seqSep parentLi foldCol) <|> lineFoldExpr parentLi foldCol
-
--- A line folded expression: parsed as a single logical line that may span
--- multiple physical lines via indentation (line folding).
+-- Structure:
+--   FOLD(let name params [: type] =)
+--   CHILD(rhs)
+--   CONTINUATION(in-exprs)
 --
--- The fold's sc' succeeds if EITHER:
--- (a) the next token is indented past foldCol (Rule 1: child), OR
--- (b) the next token is at foldCol AND starts with an unambiguously infix
---     operator (Rule 2: same-column infix exception).
-lineFoldExpr :: LineIndent -> LineIndent -> Parser Expr
-lineFoldExpr parentLi foldCol = do
-  let sc' = SC $ try $ do
-        runSC scn
-        col <- getCol
-        if col > foldCol
-          then pure ()                      -- Rule 1: child (continuation)
-        else if col == foldCol
-          then startsWithUnambiguousInfix  -- Rule 2: same-column infix exception
-          else fail "not a continuation line"
-  exprWith sc' parentLi foldCol
+-- name, params, type annotation, and = are inline tokens within the fold.
+-- The fold's col > foldCol rule allows them to wrap onto continuation lines.
 
--- Check (via lookAhead) that the next token starts with an unambiguously
--- infix operator. These are operators that can ONLY be infix, never prefix.
--- Ambiguous operators (- and +) are excluded — they follow Rule 2 normally.
-startsWithUnambiguousInfix :: Parser ()
-startsWithUnambiguousInfix = do
-  _ <- lookAhead $ choice $ map (try . string) unambiguousInfixOps
-  pure ()
-  where
-    unambiguousInfixOps :: [T.Text]
-    unambiguousInfixOps =
-      -- Triple-char operators first (before their shorter prefixes)
-      [ "|||", "&&&", "^^^", "<<<", ">>>"
-      -- Two-char operators
-      , "||", "&&", "==", "!=", "<=", ">=", "::"
-      -- Single-char operators (< and > are comparisons, not shifts)
-      , "<", ">", "*", "/", "%"
-      ]
-
-letExpr :: SeqSep -> LineIndent -> LineIndent -> Parser Expr
-letExpr seqSep parentLi itemLi = do
+letExpr :: LineIndent -> Parser Expr
+letExpr itemLi = do
   p <- getSourcePos
   let letLine = sourceLine p
-  _ <- lexeme scn (keyword "let")
-  name <- lexeme scn ident
 
-  ps <- params scn
-
-  -- Dispatch on what follows the params to determine the type annotation.
-  typeAnno <- case ps of
-    [] -> do
-      -- No params: either `: type =` (value with explicit type) or `=` (value with inferred type)
-      mColon <- optional (try (symbol scn ":"))
-      case mColon of
-        Just _ -> typeExpr scn
+  fold itemLi letLine $ do
+    _ <- keyword "let"
+    name <- lexeme ident
+    ps <- params
+    let sep = if null ps then symbol ":" else symbol "=>"
+    typeAnno <- do
+      mSep <- optional (try sep)
+      case mSep of
+        Just _ -> typeExpr
         Nothing -> freshTVar
-    _ -> do
-      -- Has params: either `=> type =` (function with explicit return type) or `=` (inferred return type)
-      mArrow <- optional (try (symbol scn "=>"))
-      case mArrow of
-        Just _ -> typeExpr scn
-        Nothing -> freshTVar
-  _ <- symbol scn "="
+    _ <- symbol "="
 
-  -- RHS is always a newline-only sequence (`;` does not separate RHS items).
-  -- This ensures that inside parens, `;` floats up to the paren-level
-  -- separator rather than being captured by the RHS.
-  rhs <- sequenceWithNewline itemLi letLine
+    -- CHILD: RHS (childBlock resets envSemi - semicolons float up)
+    rhs <- childBlock
 
-  seqPos <- getSourcePos
-  -- Continuation items use the enclosing separator: inside parens this
-  -- accepts `;`, outside parens it's newline-only.
-  contItems <- many $ try $ do
-    runSeqSep seqSep
-    sequenceItemWith seqSep parentLi letLine
-  mtin <- case contItems of
-        [] -> return Nothing
-        [x] -> return (Just x)
-        xs -> do
-          t <- freshTVar
-          return $ Just (ESequence ExprAnn { pos = seqPos, ty = t, isStmt = False } xs)
+    -- CONTINUATION: in-expression (sequence at same indent as the let)
+    mtin <- optional $ try $ continuation itemLi exprSequence
 
-  t <- freshTVar
-  return $ ELet ExprAnn { pos = p, ty = t, isStmt = True } name (Binding ps typeAnno rhs) mtin
+    t <- freshTVar
+    return $ ELet ExprAnn {pos = p, ty = t, isStmt = True} name (Binding ps typeAnno rhs) mtin
 
--- Parse one or more match arms at column >= parentLi.
-matchArms :: LineIndent -> Pos -> Parser [MatchArm]
-matchArms parentLi matchLine = do
-  firstArm <- matchArm parentLi matchLine
-  restArms <- many $ try $ do
-    runSC scn
-    matchArm parentLi matchLine
-  return (firstArm : restArms)
+-- ----------------------------------------------------------------------------
+-- Expression parser
+--
+-- The inner loop of a fold: atoms + operators using the ambient fold SC.
+-- Compound constructs (func, match, if) nest child blocks within the fold.
 
--- Parse a single arm: | pattern => body
--- Guards that | is at column >= parentLi. The arm's line-indent scopes
--- the body: own column on a new line, parentLi on the match line.
-matchArm :: LineIndent -> Pos -> Parser MatchArm
-matchArm parentLi matchLine = do
-  p <- getSourcePos
-  col <- getCol
-  guardIndentGE parentLi col
-  let armLine = sourceLine p
-      armLi
-        | armLine > matchLine      = col
-        | LineIndent 0 == parentLi = col
-        | otherwise                = parentLi
-  _ <- symbol scn "|"
-  pat <- pattern' scn
-  _ <- symbol scn "=>"
-  body <- sequenceWithNewline armLi armLine
-  return $ MatchArm p pat body
-
-
--- Expression parser parameterised on a space consumer.
--- sc' controls how far whitespace is consumed between tokens.
--- lineIndent is the column of the first non-whitespace character on the
--- physical line where parsing started (from lineFoldExpr's foldCol).
--- func/if/match use it for their body sequences instead of their own token
--- column, so that mid-line constructs (e.g. `let x = if ...`) scope correctly.
-exprWith :: SC -> LineIndent -> LineIndent -> Parser Expr
-exprWith sc' parentLineIndent lineIndent = makeExprParser atom operatorTable
+expr :: Parser Expr
+expr = makeExprParser atom operatorTable
   where
-    -- Indentation aware versions of lexeme/symbol/keyword
-    lexeme' :: Parser a -> Parser a
-    lexeme' p = p <* (try (runSC sc') <|> pure ())
-
-    symbol' :: T.Text -> Parser T.Text
-    symbol' s = lexeme' (string s)
-
-    keyword' :: T.Text -> Parser T.Text
-    keyword' w = lexeme' (keyword w)
-
-    -- Raw qualified identifier (no trailing whitespace); wrapped by lexeme' below.
     atom :: Parser Expr
     atom =
       try funcExpr
         <|> try matchExpr
         <|> try ifExpr
-        <|> try (do p <- getSourcePos; t <- freshConstrained tsFloat; EFloatLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' floatLit)
-        <|> try (do p <- getSourcePos; t <- freshConstrained tsInt; EIntLit ExprAnn { pos = p, ty = t, isStmt = False } <$> lexeme' intLit)
-        <|> try (do p <- getSourcePos; EStrLit ExprAnn { pos = p, ty = TNamed (Ident "string"), isStmt = False } <$> lexeme' stringLit)
+        <|> try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> lexeme floatLit)
+        <|> try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> lexeme intLit)
+        <|> try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> lexeme stringLit)
         <|> try sliceLit
-        <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn { pos = p, ty = t, isStmt = False } <$ symbol' "{}")
+        <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ symbol "{}")
         <|> try indexableVar
-        <|> try (do p <- getSourcePos; EUnitLit ExprAnn { pos = p, ty = UnitType, isStmt = False } <$ symbol' "()")
+        <|> try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ symbol "()")
         <|> indexableParen
 
-    -- Parse zero or more [expr] index suffixes, then consume trailing whitespace.
+    -- Parse zero or more [expr] index suffixes, then consume trailing
+    -- whitespace. The identifier/paren is parsed WITHOUT trailing whitespace
+    -- first, so we can distinguish foo[x] (index) from foo [x] (application).
     withIndexSuffix :: Expr -> Parser Expr
     withIndexSuffix base = do
-      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> exprWith sc' parentLineIndent lineIndent <* symbol' "]"; return (p, t, idx))
-      try (runSC sc') <|> pure ()
-      return $ foldl (\b (p, t, idx) -> EIndex ExprAnn { pos = p, ty = t, isStmt = False } b idx) base idxs
+      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> expr <* symbol "]"; return (p, t, idx))
+      runEnvSC
+      return $ foldl (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
 
-    -- Parse an identifier, then check for immediate [expr] index suffix.
-    -- The identifier is parsed WITHOUT trailing whitespace first, so we can
-    -- distinguish foo[x] (index, no space) from foo [x] (application with slice literal).
     indexableVar :: Parser Expr
     indexableVar = do
       p <- getSourcePos
       t <- freshTVar
-      EVar ExprAnn { pos = p, ty = t, isStmt = False } <$> qualIdent >>= withIndexSuffix
+      EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent >>= withIndexSuffix
 
-    -- Parens are transparent to layout (Option D): the enclosing parentLi
-    -- flows through unchanged. Normal line-indent rules apply inside.
+    -- Parens: delimited by ( ), semicolons are valid separators inside.
+    -- No indent guard - the delimiters themselves bound the content.
     indexableParen :: Parser Expr
     indexableParen = do
-      parenLine <- sourceLine <$> getSourcePos
       _ <- string "("
       runSC scn
-      inner <- sequenceWith (semiSeqSep parentLineIndent) parentLineIndent parenLine
+      inner <- withSemicolons exprSequence
       runSC scn
       _ <- string ")"
       withIndexSuffix inner
 
+    -- Slice literal: items are folded expressions (no let absorption),
+    -- separated by `;` or newlines. Delimited by [ ].
+    sliceLit :: Parser Expr
+    sliceLit = do
+      p <- getSourcePos
+      _ <- string "["
+      runSC scn
+      items <- withSemicolons $ do
+        let oneItem = do
+              foldCol <- resolveFoldCol
+              itemLine <- sourceLine <$> getSourcePos
+              foldExpr foldCol itemLine
+        itemLi <- getCol
+        mFirst <- optional oneItem
+        case mFirst of
+          Nothing -> pure []
+          Just first -> do
+            rest <- many $ try $ continuation itemLi oneItem
+            return (first : rest)
+      runSC scn
+      _ <- string "]"
+      t <- freshTVar
+      return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
+
+    -- func: resolve own fold, open fold for header, childBlock for body.
+    -- FOLD(func params [=> type] =)
+    -- CHILD(body)
     funcExpr :: Parser Expr
     funcExpr = do
       p <- getSourcePos
       let funcLine = sourceLine p
-      _ <- keyword' "func"
-      ps <- params sc'
-      -- Optional return type annotation: `=> type` or inferred
-      mArrow <- optional (try (symbol' "=>"))
-      typeAnno <- case mArrow of
-        Just _ -> typeExpr sc'
-        Nothing -> freshTVar
-      _ <- symbol' "="
-      -- Body: try scn to break out of fold, then parse as Sequence with
-      -- line-indent = lineIndent (the physical line's leading indent, not
-      -- the func token's column). This ensures mid-line func expressions
-      -- (e.g. `let f = func (x) => () = ...`) scope correctly.
-      body <- try (runSC scn *> sequenceWithNewline lineIndent funcLine) <|> exprWith sc' parentLineIndent lineIndent
-      t <- freshTVar
-      return $ ELambda ExprAnn { pos = p, ty = t, isStmt = False } (Binding ps typeAnno body)
+      funcCol <- resolveFoldCol
+      fold funcCol funcLine $ do
+        _ <- keyword "func"
+        ps <- params
+        mArrow <- optional (try (symbol "=>"))
+        typeAnno <- case mArrow of
+          Just _ -> typeExpr
+          Nothing -> freshTVar
+        _ <- symbol "="
+        body <- childBlock
+        t <- freshTVar
+        return $ ELambda ExprAnn {pos = p, ty = t, isStmt = False} (Binding ps typeAnno body)
 
-    -- Match expression. Scrutinee is parsed within the fold (sc').
-    -- "with" is reached via scn (breaking out of fold), allowing it at
-    -- the same column as "match" or indented. Arms follow on new lines
-    -- at column >= lineIndent (the physical line's leading indent).
+    -- match: resolve own fold for header, continuation for arms.
+    -- FOLD(match scrutinee)
+    -- CONTINUATION(with arms...)
     matchExpr :: Parser Expr
     matchExpr = do
       p <- getSourcePos
-      let matchLine = sourceLine p
-      _ <- keyword' "match"
-      scrut <- exprWith sc' parentLineIndent lineIndent
-      runSC scn
-      _ <- keyword "with"
-      runSC scn
-      arms <- matchArms lineIndent matchLine
+      matchCol <- resolveFoldCol
+      scrut <- fold matchCol (sourceLine p) $ do
+        _ <- keyword "match"
+        expr
+      arms <- continuation matchCol $ do
+        _ <- keyword "with"
+        matchArms matchCol
       t <- freshTVar
-      return $ EMatch ExprAnn { pos = p, ty = t, isStmt = False } scrut arms
+      return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
 
-    -- Slice literal: items are expressions (no let absorption), separated
-    -- by `;` or newlines. Same layout rules as parens (Option D).
-    sliceLit :: Parser Expr
-    sliceLit = do
-      p <- getSourcePos
-      bracketLine <- sourceLine <$> getSourcePos
-      _ <- string "["
-      runSC scn
-
-      let sliceItem = do
-            line <- sourceLine <$> getSourcePos
-            col <- getCol
-            guardIndent parentLineIndent col
-            let foldCol
-                  | line > bracketLine               = col
-                  | LineIndent 0 == parentLineIndent = col
-                  | otherwise                        = parentLineIndent
-            lineFoldExpr parentLineIndent foldCol
-
-      mFirst <- optional sliceItem
-      items <- case mFirst of
-        Nothing -> pure []
-        Just first -> do
-          rest <- many $ try $ do
-            runSeqSep $ semiSeqSep parentLineIndent
-            sliceItem
-          return (first : rest)
-      runSC scn
-      _ <- string "]"
-      t <- freshTVar
-      return $ ESliceLit ExprAnn { pos = p, ty = t, isStmt = False } items
-
-    -- If/then/else: condition, then-branch, and else-branch are each Sequences
-    -- with line-indent = lineIndent (the physical line's leading indent).
-    -- "else if" is a compound keyword that recurses with the same lineIndent
-    -- to avoid the staircase problem.
+    -- if: resolve own fold for condition, continuations for then/else.
+    -- FOLD(if cond)
+    -- CONTINUATION(then CHILD(then-branch))
+    -- CONTINUATION(else CHILD(else-branch))
+    -- "else if" is a compound continuation that avoids escalating indentation.
     ifExpr :: Parser Expr
     ifExpr = do
       p <- getSourcePos
       let ifLine = sourceLine p
-      _ <- keyword' "if"
-      parseIfChain p ifLine
+      ifCol <- resolveFoldCol
+      cond <- fold ifCol ifLine $ do
+        _ <- keyword "if"
+        expr
+      parseIfChain p ifCol cond
 
-    parseIfChain :: SourcePos -> Pos -> Parser Expr
-    parseIfChain p ifLine = do
-      cond <- exprWith sc' parentLineIndent lineIndent
-      runSC scn
-      thenCol <- getCol
-      guardIndentGE lineIndent thenCol
-      _ <- keyword "then"
-      runSC scn
-      thenBranch <- sequenceWithNewline lineIndent ifLine
-      runSC scn
-      elseCol <- getCol
-      guardIndentGE lineIndent elseCol
-      elseBranch <- elseOrEmpty ifLine
-      t <- freshTVar
-      return $ EIf ExprAnn { pos = p, ty = t, isStmt = False } cond thenBranch elseBranch
-
-    elseOrEmpty :: Pos -> Parser Expr
-    elseOrEmpty ifLine = do
-      mElse <- optional (keyword "else")
-      case mElse of
+    parseIfChain :: SourcePos -> LineIndent -> Expr -> Parser Expr
+    parseIfChain p ifCol cond = do
+      thenBranch <- continuation ifCol $ do
+        _ <- keyword "then"
+        childBlock
+      mElseBranch <- optional $ try $ continuation ifCol $ do
+        _ <- keyword "else"
+        mIf <- optional (keyword "if")
+        case mIf of
+          Just _ -> do
+            elseIfPos <- getSourcePos
+            let elseIfLine = sourceLine elseIfPos
+            elseIfCol <- resolveFoldCol
+            elseIfCond <- fold elseIfCol elseIfLine expr
+            parseIfChain elseIfPos ifCol elseIfCond
+          Nothing ->
+            childBlock
+      case mElseBranch of
+        Just elseBranch -> do
+          t <- freshTVar
+          return $ EIf ExprAnn {pos = p, ty = t, isStmt = False} cond thenBranch elseBranch
         Nothing -> do
           seqPos <- getSourcePos
           t <- freshTVar
-          return $ ESequence ExprAnn { pos = seqPos, ty = t, isStmt = False } []
-        Just _ -> do
-          runSC scn
-          mIf <- optional (keyword "if")
-          case mIf of
-            Just _ -> do
-              runSC scn
-              elseIfPos <- getSourcePos
-              parseIfChain elseIfPos ifLine
-            Nothing ->
-              sequenceWithNewline lineIndent ifLine
+          return $
+            EIf
+              ExprAnn {pos = p, ty = t, isStmt = False}
+              cond
+              thenBranch
+              (ESequence ExprAnn {pos = seqPos, ty = t, isStmt = False} [])
 
-    -- Parse an infix operator, ensuring it's not a prefix of a longer operator.
-    -- e.g. ">" must not match the start of ">=" or ">>>".
+    -- Match arms: one or more, each at col >= armLi.
+    matchArms :: LineIndent -> Parser [MatchArm]
+    matchArms armLi = do
+      firstArm <- matchArm
+      restArms <- many $ try $ continuation armLi matchArm
+      return (firstArm : restArms)
+
+    -- Single arm: resolve own fold for header, childBlock for body.
+    -- FOLD(| pattern =>)
+    -- CHILD(body)
+    matchArm :: Parser MatchArm
+    matchArm = do
+      p <- getSourcePos
+      let armLine = sourceLine p
+      armCol <- resolveFoldCol
+      fold armCol armLine $ do
+        _ <- symbol "|"
+        pat <- pattern'
+        _ <- symbol "=>"
+        body <- childBlock
+        return $ MatchArm p pat body
+
+    -- Parse an infix operator with boundary check.
     opParser :: T.Text -> Parser (Expr -> Expr -> Expr)
-    opParser op = lexeme' $ do
-      _ <- string op
-      notFollowedBy (satisfy isOpChar)
+    opParser op = do
+      _ <- operator op
       t <- freshTVar
-      return (\e1 e2 -> EInfixOp ExprAnn { pos = exprPos e1, ty = t, isStmt = False } e1 op e2)
-
-    isOpChar :: Char -> Bool
-    isOpChar c = c `elem` ("=<>&|^:!+-*/%" :: [Char])
-
-    infixLOpExpr :: T.Text -> Operator Parser Expr
-    infixLOpExpr op = InfixL (opParser op)
-
-    infixROpExpr :: T.Text -> Operator Parser Expr
-    infixROpExpr op = InfixR (opParser op)
+      return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
 
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
       args <- some $ do
         e <- atom
-        -- TODO implement variadic spread ... as real operator rather than magic logic inside the application expression
-        (do t <- freshTVar; EVariadicSpread ExprAnn { pos = exprPos e, ty = t, isStmt = False } e <$ lexeme' (string "...")) <|> pure e
+        (do t <- freshTVar; EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e <$ symbol "...") <|> pure e
       t <- freshTVar
-      return (\f -> EApplication ExprAnn { pos = exprPos f, ty = t, isStmt = True } f args)
+      return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)
 
     operatorTable :: [[Operator Parser Expr]]
     operatorTable =
       [ [applicationExpr],
-        [infixLOpExpr "*", infixLOpExpr "/", infixLOpExpr "%", infixLOpExpr "<<<", infixLOpExpr ">>>", infixLOpExpr "&&&"],
-        [infixLOpExpr "+", infixLOpExpr "-", infixLOpExpr "|||", infixLOpExpr "^^^"],
-        [infixROpExpr "::"],
-        [infixLOpExpr "==", infixLOpExpr "!=", infixLOpExpr ">=", infixLOpExpr ">", infixLOpExpr "<=", infixLOpExpr "<"],
-        [infixLOpExpr "&&"],
-        [infixLOpExpr "||"]
+        [InfixL (opParser "*"), InfixL (opParser "/"), InfixL (opParser "%"), InfixL (opParser "<<<"), InfixL (opParser ">>>"), InfixL (opParser "&&&")],
+        [InfixL (opParser "+"), InfixL (opParser "-"), InfixL (opParser "|||"), InfixL (opParser "^^^")],
+        [InfixR (opParser "::")],
+        [InfixL (opParser "=="), InfixL (opParser "!="), InfixL (opParser ">="), InfixL (opParser ">"), InfixL (opParser "<="), InfixL (opParser "<")],
+        [InfixL (opParser "&&")],
+        [InfixL (opParser "||")]
       ]
