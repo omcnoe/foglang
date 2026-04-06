@@ -213,6 +213,12 @@ spec = do
           -- Let RHS doesn't absorb semicolon
           ( "(let x = 1 + 2; x)",
             ELet a "x" (Binding [] (ty a) (EInfixOp a (EIntLit a (IntDecimal "1")) "+" (EIntLit a (IntDecimal "2")))) (Just (EVar a "x"))
+          ),
+          -- Semicolons replace alignment: outdented items valid with explicit ;
+          ( "(f 1;\n\
+            \  2;\n\
+            \  3)",
+            ESequence a [EApplication a (EVar a "f") [EIntLit a (IntDecimal "1")], EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
           )
         ]
 
@@ -283,10 +289,10 @@ spec = do
               (EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2")])
               (EIntLit a (IntDecimal "3"))
           ),
-          -- Then body: inline paren sequence (semicolons inside parens)
+          -- Then body: inline paren sequence (semicolons relax alignment)
           ( "if cond\n\
             \then (f 1;\n\
-            \      2)\n\
+            \  2)\n\
             \else 3",
             EIf a
               (EVar a "cond")

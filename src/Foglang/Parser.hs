@@ -30,10 +30,11 @@ module Foglang.Parser
   )
 where
 
-import Control.Monad (void, when)
+import Control.Monad (when)
 import Control.Monad.Reader (ReaderT (..), asks, local)
 import Control.Monad.State.Strict (MonadState (..), State, evalState)
 import Data.Char (isDigit, isLetter)
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Void (Void)
 import Foglang.AST (TypeExpr (..), TypeSet)
@@ -225,14 +226,21 @@ fold foldCol foldLine =
       pure ()
 
 -- | CONTINUATION: consume whitespace (+ optional ";" if envSemi),
--- check col >= li, then run parser. Uses scn directly to escape folds.
+-- check column, then run parser. Uses scn directly to escape folds.
+-- With semicolon: col > envFoldCol (semicolons relax alignment).
+-- Without semicolon: col >= li (alignment with first squence item).
 continuation :: LineIndent -> Parser a -> Parser a
 continuation li p = do
   semi <- asks envSemi
   runSC scn
-  when semi $ void $ optional $ try (string ";" *> runSC scn)
+  let consumeSemi = isJust <$> optional (try (string ";" *> runSC scn))
+  gotSemi <- if semi then consumeSemi else pure False
   col <- getCol
-  guardColGE col li
+  if gotSemi
+    then do
+      foldCol <- asks envFoldCol
+      guardColGT col foldCol
+    else guardColGE col li
   p
 
 -- | Run a parser in a semicolon-aware context (inside delimiters).
