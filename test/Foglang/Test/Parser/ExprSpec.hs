@@ -250,6 +250,113 @@ spec = do
           )
         ]
 
+  -- Indented args are fold continuations (application), not sequence items.
+  let validFoldApplication =
+        [ -- Bare: indented args
+          ( "f\n\
+            \  1\n\
+            \  2\n\
+            \  3",
+            EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          ),
+          -- Bare: inline + indented args
+          ( "f 1\n\
+            \  2\n\
+            \  3",
+            EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          ),
+          -- Parens: inline start, indented args
+          ( "(f\n\
+            \  1\n\
+            \  2\n\
+            \  3\n\
+            \)",
+            EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          ),
+          -- Then body: inline with then, continuation below is application
+          ( "if cond\n\
+            \then f 1\n\
+            \  2\n\
+            \else 3",
+            EIf a
+              (EVar a "cond")
+              (EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2")])
+              (EIntLit a (IntDecimal "3"))
+          ),
+          -- Then body: inline paren sequence (semicolons inside parens)
+          ( "if cond\n\
+            \then (f 1;\n\
+            \      2)\n\
+            \else 3",
+            EIf a
+              (EVar a "cond")
+              (ESequence a [EApplication a (EVar a "f") [EIntLit a (IntDecimal "1")], EIntLit a (IntDecimal "2")])
+              (EIntLit a (IntDecimal "3"))
+          ),
+          -- Else-if: inline with then/else, continuations are application
+          ( "if a\n\
+            \then f 1\n\
+            \  2\n\
+            \else if b\n\
+            \then g 3\n\
+            \  4\n\
+            \else 5",
+            EIf a
+              (EVar a "a")
+              (EApplication a (EVar a "f") [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2")])
+              (EIf a
+                (EVar a "b")
+                (EApplication a (EVar a "g") [EIntLit a (IntDecimal "3"), EIntLit a (IntDecimal "4")])
+                (EIntLit a (IntDecimal "5")))
+          )
+        ]
+
+  -- Same-column items are sequence siblings, not application args.
+  let validSequenceIndent =
+        [ -- Bare: all same column
+          ( "f\n\
+            \1\n\
+            \2\n\
+            \3",
+            ESequence a [EVar a "f", EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          ),
+          -- Parens: all same column
+          ( "(\n\
+            \  f\n\
+            \  1\n\
+            \  2\n\
+            \  3\n\
+            \)",
+            ESequence a [EVar a "f", EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          ),
+          -- Parens: semicolons force sequence even with indented items
+          ( "(f;\n\
+            \  1;\n\
+            \  2;\n\
+            \  3\n\
+            \)",
+            ESequence a [EVar a "f", EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")]
+          )
+        ]
+
+  -- Closing delimiter at parent indent level
+  let validClosingDelimiter =
+        [ -- Paren on own line at fold level
+          ( "let x =\n\
+            \  (\n\
+            \    1\n\
+            \  )",
+            ELet a "x" (Binding [] (ty a) (EIntLit a (IntDecimal "1"))) Nothing
+          ),
+          -- Bracket on own line at fold level
+          ( "let x =\n\
+            \  [\n\
+            \    1\n\
+            \  ]",
+            ELet a "x" (Binding [] (ty a) (ESliceLit a [EIntLit a (IntDecimal "1")])) Nothing
+          )
+        ]
+
   let parseExpr s = runParse (childBlock <* runSC scn <* eof) "ExprSpec.hs" s
 
   describe "sequence parses" $ do
@@ -266,6 +373,16 @@ spec = do
     it "lambda with untyped params" $
       mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validELambda
 
+  describe "indentation" $ do
+    it "indented items are application args (fold continuation)" $
+      mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validFoldApplication
+    it "same-column items are sequence siblings" $
+      mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validSequenceIndent
+    it "closing delimiter at parent indent level" $
+      mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validClosingDelimiter
+    it "under-indented if/then/else body" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIfIndent
+
   describe "sequence rejects" $ do
     it "invalid let" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidELet
@@ -275,5 +392,3 @@ spec = do
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEIf
     it "invalid paren" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
-    it "under-indented if/then/else body" $
-      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidIfIndent

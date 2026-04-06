@@ -168,16 +168,18 @@ guardColGE (LineIndent a) (LineIndent e) =
 -- FOLD: a region where continuation lines must be at col > foldCol
 --   (or at col == foldCol with an unambiguous infix operator).
 --   Used for expression continuation and construct headers.
+--   Sets envFoldCol and envFoldLine for child constructs.
 --
 -- CONTINUATION: content at col >= lineIndent (same level as parent).
---   Used for then/else, with, match arms, let-in items.
+--   Used for then/else, with, match arms, let-in items, closing delimiters.
+--   Does NOT set envFoldCol — compound constructs open their own folds.
 --
 -- CHILD blocks (col > envFoldCol guard + sequence parsing) are handled
 -- by childBlock in Expr.hs, using the indent helpers from this module.
 
 -- | Resolve the fold column for an item at the current position.
 -- On a new line (past envFoldLine): the item's own column defines the fold.
--- At top level (envFoldCol = 0): use own column.
+-- On the start line at top level (envFoldCol = 0): use LineIndent 1.
 -- On the start line with a parent constraint: inherit envFoldCol.
 resolveFoldCol :: Parser LineIndent
 resolveFoldCol = do
@@ -231,7 +233,7 @@ continuation li p = do
   when semi $ void $ optional $ try (string ";" *> runSC scn)
   col <- getCol
   guardColGE col li
-  local (\env -> env { envFoldCol = li }) p
+  p
 
 -- | Run a parser in a semicolon-aware context (inside delimiters).
 withSemicolons :: Parser a -> Parser a

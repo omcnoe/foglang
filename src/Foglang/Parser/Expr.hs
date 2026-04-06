@@ -15,8 +15,8 @@ import Text.Megaparsec (Pos, SourcePos, getSourcePos, many, optional, some, try,
 import Text.Megaparsec.Char (string)
 import Text.Megaparsec.Pos (sourceLine)
 
--- | Child block: indented (col > envFoldCol), newline-only sequence of items.
--- Resets envSemi to False - semicolons don't penetrate into sub-blocks.
+-- | Entry point for an indented sub-block (let RHS, func body, then/else, etc.).
+-- Guards col > envFoldCol and resets envSemi before delegating to exprSequence.
 childBlock :: Parser Expr
 childBlock = do
   foldCol <- asks envFoldCol
@@ -24,9 +24,10 @@ childBlock = do
   guardColGT col foldCol
   withoutSemicolons exprSequence
 
--- | Parse one or more items. Subsequent items are continuations
--- at the same indent as the first item. Each item is either a let
--- (which absorbs continuation) or a folded expression.
+-- | Parse one or more items at the current position. Assumes the caller
+-- has validated that this position is valid (childBlock guards col,
+-- delimiters use fold SC, let in-expr uses continuation). Subsequent
+-- items must align with the first (col >= firstItemCol).
 exprSequence :: Parser Expr
 exprSequence = do
   let item = do
@@ -64,7 +65,7 @@ letExpr itemLi = do
   p <- getSourcePos
   let letLine = sourceLine p
 
-  fold itemLi letLine $ do
+  (name, ps, typeAnno, rhs) <- fold itemLi letLine $ do
     _ <- keyword "let"
     name <- lexeme ident
     ps <- params
@@ -78,12 +79,14 @@ letExpr itemLi = do
 
     -- CHILD: RHS (childBlock resets envSemi - semicolons float up)
     rhs <- childBlock
+    return (name, ps, typeAnno, rhs)
 
-    -- CONTINUATION: in-expression (sequence at same indent as the let)
-    mtin <- optional $ try $ continuation itemLi exprSequence
+  -- CONTINUATION: in-expression (sequence at same indent as the let).
+  -- Outside the fold so envFoldCol is the enclosing context's, not the let's.
+  mtin <- optional $ try $ continuation itemLi exprSequence
 
-    t <- freshTVar
-    return $ ELet ExprAnn {pos = p, ty = t, isStmt = True} name (Binding ps typeAnno rhs) mtin
+  t <- freshTVar
+  return $ ELet ExprAnn {pos = p, ty = t, isStmt = True} name (Binding ps typeAnno rhs) mtin
 
 -- ----------------------------------------------------------------------------
 -- Expression parser
@@ -124,23 +127,25 @@ expr = makeExprParser atom operatorTable
       EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent >>= withIndexSuffix
 
     -- Parens: delimited by ( ), semicolons are valid separators inside.
-    -- No indent guard - the delimiters themselves bound the content.
+    -- Content obeys the enclosing fold's indentation rules.
     indexableParen :: Parser Expr
     indexableParen = do
       _ <- string "("
-      runSC scn
+      runEnvSC
       inner <- withSemicolons exprSequence
-      runSC scn
-      _ <- string ")"
+      foldCol <- asks envFoldCol
+      -- string not symbol: no trailing whitespace so (e)[x] (index) vs (e) [x] (application)
+      _ <- continuation foldCol (string ")")
       withIndexSuffix inner
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
+    -- Content obeys the enclosing fold's indentation rules.
     sliceLit :: Parser Expr
     sliceLit = do
       p <- getSourcePos
       _ <- string "["
-      runSC scn
+      runEnvSC
       items <- withSemicolons $ do
         let oneItem = do
               foldCol <- resolveFoldCol
@@ -153,8 +158,8 @@ expr = makeExprParser atom operatorTable
           Just first -> do
             rest <- many $ try $ continuation itemLi oneItem
             return (first : rest)
-      runSC scn
-      _ <- string "]"
+      foldCol <- asks envFoldCol
+      _ <- continuation foldCol (symbol "]")
       t <- freshTVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
 
@@ -194,10 +199,10 @@ expr = makeExprParser atom operatorTable
       t <- freshTVar
       return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
 
-    -- if: resolve own fold for condition, continuations for then/else.
+    -- if: resolve own fold for condition, then/else as folded continuations.
     -- FOLD(if cond)
-    -- CONTINUATION(then CHILD(then-branch))
-    -- CONTINUATION(else CHILD(else-branch))
+    -- CONTINUATION(FOLD(then CHILD(then-branch)))
+    -- CONTINUATION(FOLD(else CHILD(else-branch)))
     -- "else if" is a compound continuation that avoids escalating indentation.
     ifExpr :: Parser Expr
     ifExpr = do
@@ -212,20 +217,24 @@ expr = makeExprParser atom operatorTable
     parseIfChain :: SourcePos -> LineIndent -> Expr -> Parser Expr
     parseIfChain p ifCol cond = do
       thenBranch <- continuation ifCol $ do
-        _ <- keyword "then"
-        childBlock
+        branchLine <- sourceLine <$> getSourcePos
+        fold ifCol branchLine $ do
+          _ <- keyword "then"
+          childBlock
       mElseBranch <- optional $ try $ continuation ifCol $ do
-        _ <- keyword "else"
-        mIf <- optional (keyword "if")
-        case mIf of
-          Just _ -> do
-            elseIfPos <- getSourcePos
-            let elseIfLine = sourceLine elseIfPos
-            elseIfCol <- resolveFoldCol
-            elseIfCond <- fold elseIfCol elseIfLine expr
-            parseIfChain elseIfPos ifCol elseIfCond
-          Nothing ->
-            childBlock
+        branchLine <- sourceLine <$> getSourcePos
+        fold ifCol branchLine $ do
+          _ <- keyword "else"
+          mIf <- optional (keyword "if")
+          case mIf of
+            Just _ -> do
+              elseIfPos <- getSourcePos
+              let elseIfLine = sourceLine elseIfPos
+              elseIfCol <- resolveFoldCol
+              elseIfCond <- fold elseIfCol elseIfLine expr
+              parseIfChain elseIfPos ifCol elseIfCond
+            Nothing ->
+              childBlock
       case mElseBranch of
         Just elseBranch -> do
           t <- freshTVar

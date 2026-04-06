@@ -1,7 +1,8 @@
 module Foglang.Parser.Patterns (pattern') where
 
 import Foglang.AST (Pattern (..))
-import Foglang.Parser (Parser, keyword, lexeme, symbol)
+import Control.Monad.Reader (asks)
+import Foglang.Parser (Parser, continuation, envFoldCol, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.StringLit (stringLit)
@@ -36,5 +37,6 @@ tuplePattern = do
   first <- pattern'
   _ <- symbol ","
   rest <- sepBy1 pattern' (symbol ",")
-  _ <- symbol ")"
+  foldCol <- asks envFoldCol
+  _ <- continuation foldCol (symbol ")")
   return $ PtTuple (first : rest)

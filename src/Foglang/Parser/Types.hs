@@ -1,7 +1,8 @@
 module Foglang.Parser.Types (params, typeExpr) where
 
 import Foglang.AST (Ident (..), Param (..), TypeExpr (..), pattern UnitType)
-import Foglang.Parser (Parser, freshTVar, keyword, lexeme, symbol)
+import Control.Monad.Reader (asks)
+import Foglang.Parser (Parser, continuation, envFoldCol, freshTVar, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Text.Megaparsec (many, optional, try, (<|>))
 import Text.Megaparsec.Char (string)
@@ -16,14 +17,16 @@ param = unit <|> try typed <|> try parens <|> bare
       _ <- symbol ":"
       mVariadic <- optional (try (string "..."))
       ty <- typeExpr
-      _ <- symbol ")"
+      foldCol <- asks envFoldCol
+      _ <- continuation foldCol (symbol ")")
       return $ case mVariadic of
         Just _ -> PVariadic name ty
         Nothing -> PTyped name ty
     parens = do
       _ <- symbol "("
       p <- param
-      _ <- symbol ")"
+      foldCol <- asks envFoldCol
+      _ <- continuation foldCol (symbol ")")
       return p
     bare = do
       name <- lexeme ident
@@ -52,7 +55,8 @@ mapTypeExpr = do
   _ <- keyword "map"
   _ <- symbol "["
   keyTy <- typeExpr
-  _ <- symbol "]"
+  foldCol <- asks envFoldCol
+  _ <- continuation foldCol (symbol "]")
   valTy <- typeExpr
   return $ TMap keyTy valTy
 
@@ -69,7 +73,8 @@ funcTypeExpr = do
   case mZero of
     Just _ -> do
       retTy <- typeExpr
-      _ <- symbol ")"
+      foldCol <- asks envFoldCol
+      _ <- continuation foldCol (symbol ")")
       return $ TFunc [UnitType] Nothing retTy
     Nothing -> do
       fixedTys <- many (try (typeExpr <* optional (symbol "->")))
@@ -79,5 +84,6 @@ funcTypeExpr = do
         _ -> do
           _ <- symbol "=>"
           retTy <- typeExpr
-          _ <- symbol ")"
+          foldCol <- asks envFoldCol
+          _ <- continuation foldCol (symbol ")")
           return $ TFunc fixedTys mVarTy retTy
