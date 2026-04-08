@@ -61,6 +61,7 @@ func matchStd(x int) string {
 	} else {
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchMessy(x int) string {
 	_scrut1 := x
@@ -72,6 +73,7 @@ func matchMessy(x int) string {
 	} else {
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchNested(x int, y int) string {
 	_scrut1 := x
@@ -84,9 +86,11 @@ func matchNested(x int, y int) string {
 		} else {
 			return "x zero"
 		}
+		panic("runtime error: non-exhaustive match")
 	} else {
 		return "x nonzero"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchFlush(x int) string {
 	_scrut1 := x
@@ -96,6 +100,7 @@ func matchFlush(x int) string {
 	} else {
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchBitwiseOr(x int, y int) int {
 	_scrut1 := x
@@ -107,6 +112,7 @@ func matchBitwiseOr(x int, y int) int {
 	} else {
 		return 0
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchBitwiseOrFlat(x int, y int) int {
 	_scrut1 := x
@@ -118,6 +124,7 @@ func matchBitwiseOrFlat(x int, y int) int {
 	} else {
 		return 0
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchPipeAtLineIndent(x int) int {
 	_scrut1 := x
@@ -129,6 +136,7 @@ func matchPipeAtLineIndent(x int) int {
 	} else {
 		return 0
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func matchPipeNoLHS(x int) string {
 	_scrut1 := x
@@ -140,6 +148,7 @@ func matchPipeNoLHS(x int) string {
 	} else {
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func seqBody() int {
 	fmt.Println("computing")
@@ -181,6 +190,7 @@ func seqSemiMatch(x int) string {
 		fmt.Println("other")
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func seqSemiNested() int {
 	x := 1
@@ -268,6 +278,7 @@ func seqArm(x int) int {
 		fmt.Println("got nonzero")
 		return (n * 2)
 	}
+	panic("runtime error: non-exhaustive match")
 }
 
 var parenReset int = func() int {
@@ -296,7 +307,7 @@ func combo(xs []int) int {
 		_ = doubled
 		return doubled
 	}
-	panic("match not exhaustive")
+	panic("runtime error: non-exhaustive match")
 }
 
 var funcMultiLine func(int) int = func(x int) int {

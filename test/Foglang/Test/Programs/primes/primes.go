@@ -20,7 +20,7 @@ func trialDivision(count int) []int {
 				return filterInts(pred, rest)
 			}
 		}
-		panic("match not exhaustive")
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = filterInts
 	var sieve func(n int, candidates []int) []int
@@ -39,7 +39,7 @@ func trialDivision(count int) []int {
 				_ = rest
 				return append([]int{x}, sieve((n-1), filterInts(func(y int) bool { return ((y % x) != 0) }, rest))...)
 			}
-			panic("match not exhaustive")
+			panic("runtime error: non-exhaustive match")
 		}
 	}
 	_ = sieve
@@ -74,7 +74,7 @@ func primes(count int) []int {
 		} else if !(_scrut2_1) {
 			return mapInsert(table, composite, []int{prime})
 		}
-		panic("match not exhaustive")
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = addFactor
 	var foldFactors func(f func(map[int][]int, int) map[int][]int, acc map[int][]int, xs []int) map[int][]int
@@ -90,7 +90,7 @@ func primes(count int) []int {
 			_ = rest
 			return foldFactors(f, f(acc, x), rest)
 		}
-		panic("match not exhaustive")
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = foldFactors
 	var sieve func(n int, candidates []int, table map[int][]int) []int
@@ -119,9 +119,9 @@ func primes(count int) []int {
 					_ = table_shadow1
 					return sieve(n, rest, table_shadow1)
 				}
-				panic("match not exhaustive")
+				panic("runtime error: non-exhaustive match")
 			}
-			panic("match not exhaustive")
+			panic("runtime error: non-exhaustive match")
 		}
 	}
 	_ = sieve

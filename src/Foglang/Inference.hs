@@ -1,13 +1,14 @@
-module Foglang.Inference (InferError (..), inferAndResolve) where
+module Foglang.Inference (InferError (..), inferAndResolve, prettyInferError) where
 
 import Control.Monad.State.Strict (StateT, get, gets, put, modify, runStateT, lift)
 import Data.Bifunctor (first)
+import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
 import Data.Semigroup (Max (..))
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes, tsInt, isWildcard, isUnitLike)
-import Text.Megaparsec.Pos (SourcePos)
+import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
 
 -- Environment maps names to their types.
 type Env = Map.Map Ident TypeExpr
@@ -18,7 +19,7 @@ type Subst = Map.Map Int TypeExpr
 data InferError
   = UnknownVariable SourcePos Ident
   | TypeMismatch SourcePos TypeExpr TypeExpr -- expected, actual
-  | OccursIn SourcePos Int TypeExpr -- TVar appears inside the type it's being unified with (would create infinite type)
+  | InfiniteType SourcePos Int TypeExpr -- TVar appears inside the type it's being unified with (not recursive function, but "structurally infinite" type)
   | NotAFunction SourcePos TypeExpr
   | CannotInferType SourcePos
   | NamedPUnit SourcePos Ident
@@ -107,18 +108,18 @@ unify p s rawT1 rawT2 =
 
       -- Check if a TVar ID occurs in a type expression.
       -- The type expression should already have substitution applied by the caller (unify').
-      occursIn :: Int -> TypeExpr -> Bool
-      occursIn n (TVar m) = n == m
-      occursIn n (TConstrained m _) = n == m
-      occursIn n (TSlice t) = occursIn n t
-      occursIn n (TMap k v) = occursIn n k || occursIn n v
-      occursIn n (TFunc ps mVar ret) =
-        any (occursIn n) ps || maybe False (occursIn n) mVar || occursIn n ret
-      occursIn _ (TNamed _) = False
+      isInfiniteType :: Int -> TypeExpr -> Bool
+      isInfiniteType n (TVar m) = n == m
+      isInfiniteType n (TConstrained m _) = n == m
+      isInfiniteType n (TSlice t) = isInfiniteType n t
+      isInfiniteType n (TMap k v) = isInfiniteType n k || isInfiniteType n v
+      isInfiniteType n (TFunc ps mVar ret) =
+        any (isInfiniteType n) ps || maybe False (isInfiniteType n) mVar || isInfiniteType n ret
+      isInfiniteType _ (TNamed _) = False
 
       bindTVar n t
         | TVar n == t  = Right s
-        | occursIn n t = Left (OccursIn p n t)
+        | isInfiniteType n t = Left (InfiniteType p n t)
         | otherwise    = Right (Map.insert n t s)
       resolveConstrained n ts t
         | t `Set.member` tsMembers ts = Right (Map.insert n (TNamed t) s)
@@ -375,6 +376,10 @@ inferExpr env expr = case expr of
       let fTy = applySubst s (exprType tf)
       case fTy of
         TFunc fixed mVar _ -> inferKnownApp p tf targs fTy fixed mVar
+        -- TODO: opaque calls skip all argument type checking. This means
+        -- e.g. `fmt.Println args...` where args : []int generates code that
+        -- Go rejects ([]int is not []any). Needs proper import signatures
+        -- and interface subtyping to fix; until then, caught at Go compile time.
         nt@(TNamed (Ident "opaque")) -> do
           resultTy <- lift (resultType p nt (length targs))
           return (EApplication ExprAnn { pos = p, ty = resultTy, isStmt = True } tf targs)
@@ -663,3 +668,22 @@ inferAndResolve expr = do
   let afterIsStmt = computeIsStmt afterDefaults
   -- Step 6: insert unit<->struct{} coercion wrappers
   Right (insertCoercions afterIsStmt)
+
+prettyType :: TypeExpr -> String
+prettyType (TNamed (Ident n)) = T.unpack n
+prettyType (TSlice t) = "[]" <> prettyType t
+prettyType (TMap k v) = "map[" <> prettyType k <> "]" <> prettyType v
+prettyType (TFunc ps mVar ret) =
+  "func(" <> intercalate ", " (map prettyType ps ++ maybe [] (\v -> [prettyType v <> "..."]) mVar) <> ") " <> prettyType ret
+prettyType (TVar _) = "unknown type"
+prettyType (TConstrained _ ts) = let Ident n = tsDefault ts in T.unpack n
+
+prettyInferError :: InferError -> String
+prettyInferError (TypeMismatch    p t1 t2)        = sourcePosPretty p <> ": error: type mismatch: " <> prettyType t1 <> " vs " <> prettyType t2
+prettyInferError (UnknownVariable p (Ident name)) = sourcePosPretty p <> ": error: unknown variable: " <> T.unpack name
+prettyInferError (NotAFunction    p t)            = sourcePosPretty p <> ": error: not a function: " <> prettyType t
+prettyInferError (CannotInferType p)              = sourcePosPretty p <> ": error: cannot infer type"
+prettyInferError (InfiniteType    p n t)          = sourcePosPretty p <> ": error: infinite type: " <> prettyType (TVar n) <> " occurs in " <> prettyType t
+prettyInferError (NamedPUnit      p (Ident name)) = sourcePosPretty p <> ": error: named unit parameter: " <> T.unpack name
+prettyInferError (InvalidSpread   p t)            = sourcePosPretty p <> ": error: invalid spread: " <> prettyType t <> ", unexpected ...x"
+prettyInferError (MissingSpread   p t)            = sourcePosPretty p <> ": error: missing spread: " <> prettyType t <> ", expected ...x"

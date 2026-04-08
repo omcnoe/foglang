@@ -74,6 +74,21 @@ let greet (name : string) => string =
     | "Bob" => "hey Bob"
     | _ => "hi stranger"
 
+// Single wildcard match (previously generated invalid Go: `if true { return x }`)
+let identity (x : int) => int =
+  match x with
+    | _ => x
+
+// Single var-binding match
+let identity2 (x : int) => int =
+  match x with
+    | y => y + 1
+
+// Single wildcard in void context
+let printIt (x : int) => () =
+  match x with
+    | _ => fmt.Println x
+
 let main () => () =
   fmt.Println (describe 0)
   fmt.Println (describe 1)
@@ -84,3 +99,6 @@ let main () => () =
   fmt.Println (greet "Alice")
   fmt.Println (greet "Bob")
   fmt.Println (greet "Charlie")
+  fmt.Println (identity 42)
+  fmt.Println (identity2 10)
+  printIt 99

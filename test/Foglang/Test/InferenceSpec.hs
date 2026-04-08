@@ -59,9 +59,9 @@ isMissingSpread :: InferError -> Bool
 isMissingSpread (MissingSpread _ _) = True
 isMissingSpread _ = False
 
-isOccursIn :: InferError -> Bool
-isOccursIn (OccursIn _ _ _) = True
-isOccursIn _ = False
+isInfiniteType :: InferError -> Bool
+isInfiniteType (InfiniteType _ _ _) = True
+isInfiniteType _ = False
 
 isCannotInferType :: InferError -> Bool
 isCannotInferType (CannotInferType _) = True
@@ -212,10 +212,10 @@ spec = describe "Inference" $ do
       inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs..." `shouldBe` Right (TNamed (Ident "()"))
 
   describe "occurs check" $ do
-    it "self-referential function triggers OccursIn" $
+    it "self-referential function triggers InfiniteType" $
       inferResult "let f x = f\nf 1" `shouldSatisfy` \r ->
         case r of
-          Left errs -> any isOccursIn errs
+          Left errs -> any isInfiniteType errs
           Right _ -> False
 
   describe "tuple patterns" $ do

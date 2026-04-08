@@ -3,7 +3,9 @@ module Foglang.Codegen (genGoFile) where
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
-import Foglang.Inference (inferAndResolve)
+import Foglang.Inference (inferAndResolve, prettyInferError)
+import System.Exit (exitFailure)
+import System.IO (hPutStrLn, stderr)
 import System.Process (readProcess)
 
 -- Scope tracks how many times each name has been bound, enabling shadowing
@@ -219,10 +221,9 @@ genMatchBody scope mode indent tscrut arms =
          in ind indent <> keyword' <> "{\n" <> bindingText <> genBody scope mode (indent + 1) tbody
       lastFlags = replicate (length arms - 1) False ++ [True]
       armTexts = zipWith3 genArm (True : repeat False) lastFlags arms
-      lastArmIsCatchAll = case last arms of
-        MatchArm _ pat _ -> isIrrefutablePattern pat
       defaultReturn = case mode of
-        Returning | not lastArmIsCatchAll -> ind indent <> "panic(\"match not exhaustive\")\n"
+        -- TODO in future evaluate match exhaustiveness at inference time, suppress emitting panic
+        Returning -> ind indent <> "panic(\"runtime error: non-exhaustive match\")\n"
         _ -> ""
    in scrutDecl <> T.concat armTexts <> ind indent <> "}\n" <> defaultReturn
 
@@ -471,10 +472,12 @@ genPackageLevel scope e
 
 genGoFile :: FogFile -> IO T.Text
 genGoFile (FogFile hdr body) = do
-  let tbody = case inferAndResolve body of
-        Right te -> te
-        Left errs -> error $ "inference errors: " <> show errs
-      (bodyText, _) = genPackageLevel emptyScope tbody
-      raw = genHeader hdr <> bodyText
-  formatted <- readProcess "gofmt" [] (T.unpack raw)
-  return $ T.pack formatted
+  case inferAndResolve body of
+    Left errs -> do
+      mapM_ (hPutStrLn stderr) (map prettyInferError errs)
+      exitFailure
+    Right tbody -> do
+      let (bodyText, _) = genPackageLevel emptyScope tbody
+          raw = genHeader hdr <> bodyText
+      formatted <- readProcess "gofmt" [] (T.unpack raw)
+      return $ T.pack formatted

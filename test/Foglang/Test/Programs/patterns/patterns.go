@@ -12,6 +12,7 @@ func describe(x int) string {
 	} else {
 		return "other"
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func testSiblings(x int) int {
 	var double func(n int) int
@@ -23,6 +24,7 @@ func testSiblings(x int) int {
 		} else {
 			return (n * 2)
 		}
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = double
 	var triple func(n int) int
@@ -34,6 +36,7 @@ func testSiblings(x int) int {
 		} else {
 			return (n * 3)
 		}
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = triple
 	var quadruple func(n int) int
@@ -45,6 +48,7 @@ func testSiblings(x int) int {
 		} else {
 			return (n * 4)
 		}
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = quadruple
 	_scrut1 := x
@@ -70,6 +74,7 @@ func first(x int) int {
 		} else {
 			return (n * 2)
 		}
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = a
 	var b func(n int) int
@@ -81,6 +86,7 @@ func first(x int) int {
 		} else {
 			return (n * 3)
 		}
+		panic("runtime error: non-exhaustive match")
 	}
 	_ = b
 	var inner func(candidates []int) int
@@ -106,8 +112,9 @@ func first(x int) int {
 					_ = r
 					return r
 				}
+				panic("runtime error: non-exhaustive match")
 			}
-			panic("match not exhaustive")
+			panic("runtime error: non-exhaustive match")
 		}
 	}
 	_ = inner
@@ -121,6 +128,7 @@ func second(x int) int {
 	} else {
 		return (x * 3)
 	}
+	panic("runtime error: non-exhaustive match")
 }
 func greet(name string) string {
 	_scrut1 := name
@@ -131,6 +139,32 @@ func greet(name string) string {
 		return "hey Bob"
 	} else {
 		return "hi stranger"
+	}
+	panic("runtime error: non-exhaustive match")
+}
+func identity(x int) int {
+	_scrut1 := x
+	_ = _scrut1
+	if true {
+		return x
+	}
+	panic("runtime error: non-exhaustive match")
+}
+func identity2(x int) int {
+	_scrut1 := x
+	_ = _scrut1
+	if true {
+		y := _scrut1
+		_ = y
+		return (y + 1)
+	}
+	panic("runtime error: non-exhaustive match")
+}
+func printIt(x int) {
+	_scrut1 := x
+	_ = _scrut1
+	if true {
+		fmt.Println(x)
 	}
 }
 func main() {
@@ -143,4 +177,7 @@ func main() {
 	fmt.Println(greet("Alice"))
 	fmt.Println(greet("Bob"))
 	fmt.Println(greet("Charlie"))
+	fmt.Println(identity(42))
+	fmt.Println(identity2(10))
+	printIt(99)
 }
