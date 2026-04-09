@@ -145,12 +145,6 @@ let matchNested (x : int) (y : int) => string =
         | _ => "x zero"
     | _ => "x nonzero"
 
-// --- Arms right at match column (col >= match col includes ==) ---
-let matchFlush (x : int) => string =
-  match x with
-  | 0 => "zero"
-  | _ => "other"
-
 // --- Bitwise OR inside arm body vs new arm ---
 // ||| inside a fold (after a LHS) is bitwise OR; | as a fresh sequence item is an arm
 let matchBitwiseOr (x : int) (y : int) => int =
@@ -376,7 +370,6 @@ let main () => () =
   fmt.Println (matchMessy 42)           // "other"
   fmt.Println (matchNested 0 0)        // "both zero"
   fmt.Println (matchNested 0 1)        // "x zero"
-  fmt.Println (matchFlush 0)           // "zero"
   fmt.Println (matchBitwiseOr 1 4)     // 7 (4 ||| 3)
   fmt.Println (matchBitwiseOr 2 4)     // 4
   fmt.Println (matchBitwiseOrFlat 1 4) // 7 (4 ||| 3)

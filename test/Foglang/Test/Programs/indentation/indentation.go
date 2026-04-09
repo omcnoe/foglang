@@ -92,16 +92,6 @@ func matchNested(x int, y int) string {
 	}
 	panic("runtime error: non-exhaustive match")
 }
-func matchFlush(x int) string {
-	_scrut1 := x
-	_ = _scrut1
-	if _scrut1 == 0 {
-		return "zero"
-	} else {
-		return "other"
-	}
-	panic("runtime error: non-exhaustive match")
-}
 func matchBitwiseOr(x int, y int) int {
 	_scrut1 := x
 	_ = _scrut1
@@ -349,7 +339,6 @@ func main() {
 	fmt.Println(matchMessy(42))
 	fmt.Println(matchNested(0, 0))
 	fmt.Println(matchNested(0, 1))
-	fmt.Println(matchFlush(0))
 	fmt.Println(matchBitwiseOr(1, 4))
 	fmt.Println(matchBitwiseOr(2, 4))
 	fmt.Println(matchBitwiseOrFlat(1, 4))

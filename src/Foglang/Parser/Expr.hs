@@ -1,4 +1,4 @@
-module Foglang.Parser.Expr (childBlock) where
+module Foglang.Parser.Expr (childBlockExprSequence) where
 
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Control.Monad.Reader (asks)
@@ -15,14 +15,10 @@ import Text.Megaparsec (Pos, SourcePos, getSourcePos, many, optional, some, try,
 import Text.Megaparsec.Char (string)
 import Text.Megaparsec.Pos (sourceLine)
 
--- | Entry point for an indented sub-block (let RHS, func body, then/else, etc.).
--- Guards col > envFoldCol and resets envSemi before delegating to exprSequence.
-childBlock :: Parser Expr
-childBlock = do
-  foldCol <- asks envFoldCol
-  col <- getCol
-  guardColGT col foldCol
-  withoutSemicolons exprSequence
+-- | Indented expression sub-block (let RHS, func body, then/else, etc.).
+-- Simple shorthand helper
+childBlockExprSequence :: Parser Expr
+childBlockExprSequence = childBlock (withoutSemicolons exprSequence)
 
 -- | Parse one or more items at the current position. Assumes the caller
 -- has validated that this position is valid (childBlock guards col,
@@ -77,8 +73,7 @@ letExpr itemLi = do
         Nothing -> freshTVar
     _ <- symbol "="
 
-    -- CHILD: RHS (childBlock resets envSemi - semicolons float up)
-    rhs <- childBlock
+    rhs <- childBlockExprSequence
     return (name, ps, typeAnno, rhs)
 
   -- CONTINUATION: in-expression (sequence at same indent as the let).
@@ -179,7 +174,7 @@ expr = makeExprParser atom operatorTable
           Just _ -> typeExpr
           Nothing -> freshTVar
         _ <- symbol "="
-        body <- childBlock
+        body <- childBlockExprSequence
         t <- freshTVar
         return $ ELambda ExprAnn {pos = p, ty = t, isStmt = False} (Binding ps typeAnno body)
 
@@ -195,7 +190,7 @@ expr = makeExprParser atom operatorTable
         expr
       arms <- continuation matchCol $ do
         _ <- keyword "with"
-        matchArms matchCol
+        matchArms
       t <- freshTVar
       return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
 
@@ -220,7 +215,7 @@ expr = makeExprParser atom operatorTable
         branchLine <- sourceLine <$> getSourcePos
         fold ifCol branchLine $ do
           _ <- keyword "then"
-          childBlock
+          childBlockExprSequence
       mElseBranch <- optional $ try $ continuation ifCol $ do
         branchLine <- sourceLine <$> getSourcePos
         fold ifCol branchLine $ do
@@ -234,7 +229,7 @@ expr = makeExprParser atom operatorTable
               elseIfCond <- fold elseIfCol elseIfLine expr
               parseIfChain elseIfPos ifCol elseIfCond
             Nothing ->
-              childBlock
+              childBlockExprSequence
       case mElseBranch of
         Just elseBranch -> do
           t <- freshTVar
@@ -249,9 +244,13 @@ expr = makeExprParser atom operatorTable
               thenBranch
               (ESequence ExprAnn {pos = seqPos, ty = t, isStmt = False} [])
 
-    -- Match arms: one or more, each at col >= armLi.
-    matchArms :: LineIndent -> Parser [MatchArm]
-    matchArms armLi = do
+    -- Match arms: one or more, strictly indented past the match keyword.
+    -- Strictly indented resolves issues with ambiguous nested matches.
+    -- Uses childBlock to enforce col > matchCol, then sequences arms
+    -- at the first arm's column, same pattern as exprSequence.
+    matchArms :: Parser [MatchArm]
+    matchArms = childBlock $ do
+      armLi <- getCol
       firstArm <- matchArm
       restArms <- many $ try $ continuation armLi matchArm
       return (firstArm : restArms)
@@ -268,7 +267,7 @@ expr = makeExprParser atom operatorTable
         _ <- symbol "|"
         pat <- pattern'
         _ <- symbol "=>"
-        body <- childBlock
+        body <- childBlockExprSequence
         return $ MatchArm p pat body
 
     -- Parse an infix operator with boundary check.

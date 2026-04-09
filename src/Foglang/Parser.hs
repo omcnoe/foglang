@@ -9,7 +9,7 @@ module Foglang.Parser
     -- Fresh type vars
     freshTVar,
     freshTConstrained,
-    -- Vocabulary (ReaderT-based, no SC parameter)
+    -- Vocabulary (using envSC from ReaderT)
     keyword,
     operator,
     symbol,
@@ -19,13 +19,13 @@ module Foglang.Parser
     -- Combinators
     fold,
     continuation,
+    childBlock,
     resolveFoldCol,
     withSemicolons,
     withoutSemicolons,
-    -- Helpers
+    -- Indentation
     getCol,
     guardColGT,
-    -- Env access
     envFoldCol,
   )
 where
@@ -164,7 +164,7 @@ guardColGE (LineIndent a) (LineIndent e) =
   when (a < e) $ fail $ "incorrect indentation (got " ++ show a ++ ", should be >= " ++ show e ++ ")"
 
 -- ----------------------------------------------------------------------------
--- FOLD and CONTINUATION
+-- FOLD and CONTINUATION and CHILD
 --
 -- FOLD: a region where continuation lines must be at col > foldCol
 --   (or at col == foldCol with an unambiguous infix operator).
@@ -241,6 +241,15 @@ continuation li p = do
       foldCol <- asks envFoldCol
       guardColGT col foldCol
     else guardColGE col li
+  p
+
+-- | CHILD block: guard col > envFoldCol, then run parser.
+-- Used for indented sub-blocks (let RHS, func body, match arms, etc.).
+childBlock :: Parser a -> Parser a
+childBlock p = do
+  foldCol <- asks envFoldCol
+  col <- getCol
+  guardColGT col foldCol
   p
 
 -- | Run a parser in a semicolon-aware context (inside delimiters).

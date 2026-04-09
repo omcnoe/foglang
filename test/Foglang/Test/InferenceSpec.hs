@@ -4,13 +4,13 @@ import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
 import Foglang.Parser (SC(..), runParse, scn)
-import Foglang.Parser.Expr (childBlock)
+import Foglang.Parser.Expr (childBlockExprSequence)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
 
 -- Parse a fog expression string into an Expr.
 parseExpr :: T.Text -> Either String Expr
-parseExpr s = case runParse (childBlock <* runSC scn <* eof) "test" s of
+parseExpr s = case runParse (childBlockExprSequence <* runSC scn <* eof) "test" s of
   Left err -> Left (show err)
   Right expr -> Right expr
 
@@ -221,7 +221,7 @@ spec = describe "Inference" $ do
   describe "tuple patterns" $ do
     it "tuple pattern binds variables" $ do
       -- match against a Go multi-return (opaque), tuple pattern should infer
-      let src = "let m : map[string]int = {}\nlet x = m[\"key\"]\nmatch x with\n| (val, ok) => val"
+      let src = "let m : map[string]int = {}\nlet x = m[\"key\"]\nmatch x with\n  | (val, ok) => val"
       inferResult src `shouldSatisfy` \r ->
         case r of
           Right _ -> True
@@ -229,7 +229,7 @@ spec = describe "Inference" $ do
 
   describe "cons pattern on wrong type" $ do
     it "cons pattern on int fails" $
-      inferResult "let x : int = 42\nmatch x with\n| h :: t => h\n| _ => 0" `shouldSatisfy` \r ->
+      inferResult "let x : int = 42\nmatch x with\n  | h :: t => h\n  | _ => 0" `shouldSatisfy` \r ->
         case r of
           Left errs -> any isTypeMismatch errs
           Right _ -> False

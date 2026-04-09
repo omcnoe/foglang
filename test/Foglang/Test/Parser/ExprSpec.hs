@@ -3,7 +3,7 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
 import Foglang.Parser (SC(..), runParse, scn)
-import Foglang.Parser.Expr (childBlock)
+import Foglang.Parser.Expr (childBlockExprSequence)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
 import Text.Megaparsec.Pos (initialPos)
@@ -227,6 +227,11 @@ spec = do
           "1)"
         ]
 
+  let invalidMatch =
+        [ -- arms at same column as match (must be indented past)
+          "match x with\n| 0 => 1\n| _ => 2"
+        ]
+
   let validEApplication =
         [ ("f x", EApplication a (EVar a "f") [EVar a "x"]),
           ("f x y", EApplication a (EVar a "f") [EVar a "x", EVar a "y"]),
@@ -363,7 +368,7 @@ spec = do
           )
         ]
 
-  let parseExpr s = runParse (childBlock <* runSC scn <* eof) "ExprSpec.hs" s
+  let parseExpr s = runParse (childBlockExprSequence <* runSC scn <* eof) "ExprSpec.hs" s
 
   describe "sequence parses" $ do
     it "let" $
@@ -398,3 +403,5 @@ spec = do
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEIf
     it "invalid paren" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
+    it "invalid match (flush arms)" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidMatch
