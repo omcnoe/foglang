@@ -152,9 +152,9 @@ expr = makeExprParser term termOpTable
       t <- freshTVar
       return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
 
-    floatLitExpr  = try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit)
-    intLitExpr    = try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit)
-    stringLitExpr = try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> stringLit)
+    floatLitExpr  = do p <- getSourcePos; t <- freshTConstrained tsFloat;      EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit
+    intLitExpr    = do p <- getSourcePos; t <- freshTConstrained tsInt;        EIntLit   ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit
+    stringLitExpr = do p <- getSourcePos; t <- pure $ TNamed $ Ident "string"; EStrLit   ExprAnn {pos = p, ty = t, isStmt = False} <$> stringLit
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
@@ -181,9 +181,9 @@ expr = makeExprParser term termOpTable
       t <- freshTVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
 
-    mapLitExpr  = try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}")
-    varExpr     = try (do p <- getSourcePos; t <- freshTVar; EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent)
-    unitLitExpr = try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ string "()")
+    mapLitExpr  = do p <- getSourcePos; t <- freshTVar;       EMapLit  ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}"
+    varExpr     = do p <- getSourcePos; t <- freshTVar;       EVar     ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent
+    unitLitExpr = do p <- getSourcePos; t <- pure $ UnitType; EUnitLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "()"
 
     -- Parens: delimited by ( ), semicolons are valid separators inside.
     -- Content obeys the enclosing fold's indentation rules.
