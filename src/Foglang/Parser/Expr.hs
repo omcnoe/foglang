@@ -194,55 +194,26 @@ expr = makeExprParser atom operatorTable
       t <- freshTVar
       return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
 
-    -- if: resolve own fold for condition, then/else as folded continuations.
-    -- FOLD(if cond)
-    -- CONTINUATION(FOLD(then CHILD(then-branch)))
-    -- CONTINUATION(FOLD(else CHILD(else-branch)))
-    -- "else if" is a compound continuation that avoids escalating indentation.
+    -- if cond then body [else body]
+    -- "else if" is just else with an if expression inside -- no special case needed.
     ifExpr :: Parser Expr
     ifExpr = do
       p <- getSourcePos
       let ifLine = sourceLine p
       ifCol <- resolveFoldCol
-      cond <- fold ifCol ifLine $ do
-        _ <- keyword "if"
-        expr
-      parseIfChain p ifCol cond
-
-    parseIfChain :: SourcePos -> LineIndent -> Expr -> Parser Expr
-    parseIfChain p ifCol cond = do
+      cond <- fold ifCol ifLine (keyword "if" *> expr)
       thenBranch <- continuation ifCol $ do
         branchLine <- sourceLine <$> getSourcePos
-        fold ifCol branchLine $ do
-          _ <- keyword "then"
-          childBlockExprSequence
+        fold ifCol branchLine (keyword "then" *> childBlockExprSequence)
       mElseBranch <- optional $ try $ continuation ifCol $ do
         branchLine <- sourceLine <$> getSourcePos
-        fold ifCol branchLine $ do
-          _ <- keyword "else"
-          mIf <- optional (keyword "if")
-          case mIf of
-            Just _ -> do
-              elseIfPos <- getSourcePos
-              let elseIfLine = sourceLine elseIfPos
-              elseIfCol <- resolveFoldCol
-              elseIfCond <- fold elseIfCol elseIfLine expr
-              parseIfChain elseIfPos ifCol elseIfCond
-            Nothing ->
-              childBlockExprSequence
-      case mElseBranch of
-        Just elseBranch -> do
-          t <- freshTVar
-          return $ EIf ExprAnn {pos = p, ty = t, isStmt = False} cond thenBranch elseBranch
-        Nothing -> do
-          seqPos <- getSourcePos
-          t <- freshTVar
-          return $
-            EIf
-              ExprAnn {pos = p, ty = t, isStmt = False}
-              cond
-              thenBranch
-              (ESequence ExprAnn {pos = seqPos, ty = t, isStmt = False} [])
+        fold ifCol branchLine (keyword "else" *> childBlockExprSequence)
+      t <- freshTVar
+      let elseBranch = case mElseBranch of
+            Just e  -> e
+            -- empty else branch defaults to () value
+            Nothing -> EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False}
+      return $ EIf ExprAnn {pos = p, ty = t, isStmt = False} cond thenBranch elseBranch
 
     -- Match arms: one or more, strictly indented past the match keyword.
     -- Strictly indented resolves issues with ambiguous nested matches.

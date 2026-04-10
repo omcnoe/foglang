@@ -112,8 +112,8 @@ typeExprGoText (TFunc fixedTys mVarTy retTy) =
     <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeExprGoText vTy]) mVarTy)
     <> ")"
     <> retTypeGoText retTy
-typeExprGoText (TVar _) = error "TVar survived to codegen"
-typeExprGoText (TConstrained _ _) = error "TConstrained survived to codegen"
+typeExprGoText (TVar _) = error "typeExprGoText: TVar survived to codegen"
+typeExprGoText (TConstrained _ _) = error "typeExprGoText: TConstrained survived to codegen"
 
 -- Alias for readability in parameter positions.
 paramTypeGoText :: TypeExpr -> T.Text
@@ -273,12 +273,11 @@ genBody :: Scope -> BodyMode -> Int -> Expr -> T.Text
 genBody _ Void _ (EUnitLit _) = ""
 genBody scope mode indent (EIf _ cond then' else') = genIfChain scope mode indent cond then' else'
 genBody scope mode indent (EMatch _ tscrut tarms) = genMatchBody scope mode indent tscrut tarms
+genBody _ _ _ (ESequence _ []) = error "genBody: empty ESequence in codegen"
 genBody scope Void indent (ESequence _ texprs) = T.concat (map (genBody scope Void indent) texprs)
-genBody scope Returning indent (ESequence _ texprs)
-  | null texprs = error "genBody Returning: empty ESequence (should be unreachable)"
-  | otherwise =
-      T.concat (map (genBody scope Void indent) (init texprs))
-        <> genBody scope Returning indent (last texprs)
+genBody scope Returning indent (ESequence _ texprs) =
+  T.concat (map (genBody scope Void indent) (init texprs))
+    <> genBody scope Returning indent (last texprs)
 -- Void binding: RHS is void (can't bind in Go), or declared type is unit
 genBody scope mode indent (ELet _ (Ident "_") (Binding [] retTy trhs) mtin)
   | retTy == UnitType || exprType trhs == UnitType =
@@ -385,7 +384,7 @@ genExpr scope (EApplication _ tf targs) =
                in genExpr scope tf <> "(" <> T.intercalate ", " args <> ")"
     _ -> genExpr scope tf <> "(" <> T.intercalate ", " (map (genExpr scope) targs) <> ")"
 genExpr scope e@(EIf {}) = genExprIIFE scope e
-genExpr _ (ESequence _ []) = error "genExpr: empty ESequence should not reach expression context"
+genExpr _ (ESequence _ []) = error "genExpr: empty ESequence in codegen"
 genExpr scope e@(ESequence {}) = genExprIIFE scope e
 genExpr scope e@(ELet _ _ _ (Just _)) = genExprIIFE scope e
 genExpr _ (ELet _ _ _ Nothing) = error "genExpr: ELet without continuation should be in statement context"
