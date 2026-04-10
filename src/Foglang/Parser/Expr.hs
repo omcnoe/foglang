@@ -90,60 +90,71 @@ letExpr itemLi = do
 --
 -- Two-layer makeExprParser (hierarchy: atom < term < expr), so tight
 -- postfixes bind tighter than application (`f a[0]` = `f (a[0])`):
---   * mainOpTable over term    - application + infix operators
---   * postfixOpTable over atom - tight postfixes (indexing)
+--   * atomOpTable - tight atom postfixes (eg. indexing)
+--   * termOpTable - application + infix operators
 
 expr :: Parser Expr
-expr = makeExprParser term mainOpTable
+expr = makeExprParser term termOpTable
   where
     term :: Parser Expr
-    term = lexeme $ makeExprParser atom postfixOpTable
-        where
-          atom :: Parser Expr
-          atom =
-            funcExpr
-              <|> matchExpr
-              <|> ifExpr
-              <|> try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit)
-              <|> try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit)
-              <|> try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> stringLit)
-              <|> sliceLit
-              <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}")
-              <|> try (do p <- getSourcePos; t <- freshTVar; EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent)
-              <|> try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ string "()")
-              <|> parenExpr
+    term = lexeme $ makeExprParser atom atomOpTable
 
-          -- `some` chains multiple `[...]` suffixes in one Postfix invocation;
-          -- makeExprParser's Postfix only fires once per term otherwise.
-          -- withoutSemicolons stops the closing `]`'s continuation from eating
-          -- a stray `;` when we're inside a paren's semicolon-aware context.
-          indexExpr :: Operator Parser Expr
-          indexExpr = Postfix $ withoutSemicolons $ do
-            idxs <- some $ do
-              p <- getSourcePos
-              _ <- string "["
-              t <- freshTVar
-              runEnvSC
-              idx <- expr
-              foldCol <- asks envFoldCol
-              _ <- continuation foldCol (string "]")
-              return (p, t, idx)
-            return $ \base ->
-              foldl' (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
+    atomOpTable :: [[Operator Parser Expr]]
+    atomOpTable = [[indexOp]]
 
-          postfixOpTable :: [[Operator Parser Expr]]
-          postfixOpTable = [[indexExpr]]
+    termOpTable :: [[Operator Parser Expr]]
+    termOpTable =
+      [ [applicationExpr],
+        [InfixL (infixOp "*"), InfixL (infixOp "/"), InfixL (infixOp "%"), InfixL (infixOp "<<<"), InfixL (infixOp ">>>"), InfixL (infixOp "&&&")],
+        [InfixL (infixOp "+"), InfixL (infixOp "-"), InfixL (infixOp "|||"), InfixL (infixOp "^^^")],
+        [InfixR (infixOp "::")],
+        [InfixL (infixOp "=="), InfixL (infixOp "!="), InfixL (infixOp ">="), InfixL (infixOp ">"), InfixL (infixOp "<="), InfixL (infixOp "<")],
+        [InfixL (infixOp "&&")],
+        [InfixL (infixOp "||")]
+      ]
 
-    -- Parens: delimited by ( ), semicolons are valid separators inside.
-    -- Content obeys the enclosing fold's indentation rules.
-    parenExpr :: Parser Expr
-    parenExpr = do
-      _ <- string "("
-      runEnvSC
-      inner <- withSemicolons exprSequence
-      foldCol <- asks envFoldCol
-      _ <- continuation foldCol (string ")")
-      return inner
+    atom :: Parser Expr
+    atom =
+        floatLitExpr -- must come before intLitExpr to resolve ambigous prefix case: 123.456 parses as valid int 123 leaving dangling .456
+        <|> intLitExpr
+        <|> stringLitExpr
+        <|> sliceLit
+        <|> mapLitExpr
+        <|> varExpr
+        <|> unitLitExpr -- must come before parenExpr to resolve ambigous empty paren case: () is EUnitLit not empty ESequence
+        <|> parenExpr
+        <|> funcExpr
+        <|> matchExpr
+        <|> ifExpr
+
+    -- `some` chains multiple `[...]` suffixes in one Postfix invocation;
+    -- makeExprParser's Postfix only fires once per term otherwise.
+    -- withoutSemicolons stops the closing `]`'s continuation from eating
+    -- a stray `;` when we're inside a paren's semicolon-aware context.
+    indexOp :: Operator Parser Expr
+    indexOp = Postfix $ withoutSemicolons $ do
+      idxs <- some $ do
+        p <- getSourcePos
+        _ <- string "["
+        t <- freshTVar
+        runEnvSC
+        idx <- expr
+        foldCol <- asks envFoldCol
+        _ <- continuation foldCol (string "]")
+        return (p, t, idx)
+      return $ \base ->
+        foldl' (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
+
+    -- Parse an infix operator with boundary check.
+    infixOp :: T.Text -> Parser (Expr -> Expr -> Expr)
+    infixOp op = do
+      _ <- operator op
+      t <- freshTVar
+      return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
+
+    floatLitExpr  = try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit)
+    intLitExpr    = try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit)
+    stringLitExpr = try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> stringLit)
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
@@ -169,6 +180,21 @@ expr = makeExprParser term mainOpTable
       _ <- continuation foldCol (string "]")
       t <- freshTVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
+
+    mapLitExpr  = try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}")
+    varExpr     = try (do p <- getSourcePos; t <- freshTVar; EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent)
+    unitLitExpr = try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ string "()")
+
+    -- Parens: delimited by ( ), semicolons are valid separators inside.
+    -- Content obeys the enclosing fold's indentation rules.
+    parenExpr :: Parser Expr
+    parenExpr = do
+      _ <- string "("
+      runEnvSC
+      inner <- withSemicolons exprSequence
+      foldCol <- asks envFoldCol
+      _ <- continuation foldCol (string ")")
+      return inner
 
     -- func: resolve own fold, open fold for header, childBlock for body.
     -- FOLD(func params [=> type] =)
@@ -205,6 +231,32 @@ expr = makeExprParser term mainOpTable
         matchArms
       t <- freshTVar
       return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
+      where
+        -- Match arms: one or more, strictly indented past the match keyword.
+        -- Strictly indented resolves issues with ambiguous nested matches.
+        -- Uses childBlock to enforce col > matchCol, then sequences arms
+        -- at the first arm's column, same pattern as exprSequence.
+        matchArms :: Parser [MatchArm]
+        matchArms = childBlock $ do
+          armLi <- getCol
+          firstArm <- matchArm
+          restArms <- many $ try $ continuation armLi matchArm
+          return (firstArm : restArms)
+
+        -- Single arm: resolve own fold for header, childBlock for body.
+        -- FOLD(| pattern =>)
+        -- CHILD(body)
+        matchArm :: Parser MatchArm
+        matchArm = do
+          p <- getSourcePos
+          let armLine = sourceLine p
+          armCol <- resolveFoldCol
+          fold armCol armLine $ do
+            _ <- symbol "|"
+            pat <- pattern'
+            _ <- symbol "=>"
+            body <- childBlockExprSequence
+            return $ MatchArm p pat body
 
     -- if cond then body [else body]
     -- "else if" is just else with an if expression inside -- no special case needed.
@@ -227,39 +279,6 @@ expr = makeExprParser term mainOpTable
             Nothing -> EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False}
       return $ EIf ExprAnn {pos = p, ty = t, isStmt = False} cond thenBranch elseBranch
 
-    -- Match arms: one or more, strictly indented past the match keyword.
-    -- Strictly indented resolves issues with ambiguous nested matches.
-    -- Uses childBlock to enforce col > matchCol, then sequences arms
-    -- at the first arm's column, same pattern as exprSequence.
-    matchArms :: Parser [MatchArm]
-    matchArms = childBlock $ do
-      armLi <- getCol
-      firstArm <- matchArm
-      restArms <- many $ try $ continuation armLi matchArm
-      return (firstArm : restArms)
-
-    -- Single arm: resolve own fold for header, childBlock for body.
-    -- FOLD(| pattern =>)
-    -- CHILD(body)
-    matchArm :: Parser MatchArm
-    matchArm = do
-      p <- getSourcePos
-      let armLine = sourceLine p
-      armCol <- resolveFoldCol
-      fold armCol armLine $ do
-        _ <- symbol "|"
-        pat <- pattern'
-        _ <- symbol "=>"
-        body <- childBlockExprSequence
-        return $ MatchArm p pat body
-
-    -- Parse an infix operator with boundary check.
-    opParser :: T.Text -> Parser (Expr -> Expr -> Expr)
-    opParser op = do
-      _ <- operator op
-      t <- freshTVar
-      return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
-
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
       args <- some $ do
@@ -267,14 +286,3 @@ expr = makeExprParser term mainOpTable
         (do t <- freshTVar; EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e <$ symbol "...") <|> pure e
       t <- freshTVar
       return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)
-
-    mainOpTable :: [[Operator Parser Expr]]
-    mainOpTable =
-      [ [applicationExpr],
-        [InfixL (opParser "*"), InfixL (opParser "/"), InfixL (opParser "%"), InfixL (opParser "<<<"), InfixL (opParser ">>>"), InfixL (opParser "&&&")],
-        [InfixL (opParser "+"), InfixL (opParser "-"), InfixL (opParser "|||"), InfixL (opParser "^^^")],
-        [InfixR (opParser "::")],
-        [InfixL (opParser "=="), InfixL (opParser "!="), InfixL (opParser ">="), InfixL (opParser ">"), InfixL (opParser "<="), InfixL (opParser "<")],
-        [InfixL (opParser "&&")],
-        [InfixL (opParser "||")]
-      ]
