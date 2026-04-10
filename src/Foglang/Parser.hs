@@ -31,8 +31,8 @@ module Foglang.Parser
 where
 
 import Control.Monad (when)
-import Control.Monad.Reader (ReaderT (..), asks, local)
-import Control.Monad.State.Strict (MonadState (..), State, evalState)
+import Control.Monad.Reader (Reader, asks, local, runReader)
+import Control.Monad.State.Strict (MonadState (..), StateT, evalStateT, gets)
 import Data.Char (isDigit, isLetter)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
@@ -51,17 +51,25 @@ import Text.Megaparsec.Pos (mkPos, sourceColumn, sourceLine)
 -- envSemi: True inside delimiters (parens/brackets) where `;` separates items.
 -- envFoldCol: the fold column of the enclosing context (set by `fold`).
 -- envFoldLine: the line where the enclosing fold started.
-data Env = Env
+data ParserEnv = ParserEnv
   { envSC :: SC,
     envSemi :: Bool,
     envFoldCol :: LineIndent,
     envFoldLine :: Pos
   }
 
+-- | Parser state.
+-- stateNextTVar: next fresh TVar ID.
+data ParserState = ParserState
+  { stateNextTVar :: Int }
+
 -- | Main parser type.
--- ReaderT Env: carries ambient space consumer and semicolon context.
--- State Int: TVar counter (survives backtracking, but doesn't matter).
-type Parser = ParsecT Void T.Text (ReaderT Env (State Int))
+-- StateT ParserState: mutable parser state. Outermost so that custom state
+-- rewinds when megaparsec backtracks.
+-- ParsecT: megaparsec parser layer.
+-- Reader ParserEnv: carries ambient space consumer, fold column, and
+-- semicolon context.
+type Parser = StateT ParserState (ParsecT Void T.Text (Reader ParserEnv))
 
 -- | Space consumer: controls how far whitespace is consumed between tokens.
 -- Newtype-wrapped to prevent accidentally using an arbitrary Parser ()
@@ -89,17 +97,20 @@ scn =
 
 -- | Run a parser to completion. Initial ambient SC is scn (unconstrained).
 runParse :: Parser a -> String -> T.Text -> Either (ParseErrorBundle T.Text Void) a
-runParse p name input = evalState (runReaderT (runParserT p name input) Env { envSC = scn, envSemi = False, envFoldCol = LineIndent 0, envFoldLine = mkPos 1 }) 0
+runParse p name input =
+  runReader (runParserT (evalStateT p initState) name input) initEnv
+  where
+    initState = ParserState { stateNextTVar = 0 }
+    initEnv = ParserEnv { envSC = scn, envSemi = False, envFoldCol = LineIndent 0, envFoldLine = mkPos 1 }
 
 -- ----------------------------------------------------------------------------
 -- Fresh type variables
 
--- | Mint a fresh type variable with a globally unique ID.
--- Uses State as the inner monad so IDs never backtrack on parse failures.
+-- | Mint a fresh type variable.
 freshTVar :: Parser TypeExpr
 freshTVar = do
-  n <- get
-  put (n + 1)
+  n <- gets stateNextTVar
+  put ParserState { stateNextTVar = n + 1 }
   return (TVar n)
 
 -- | Mint a fresh constrained type variable (for literals etc.)
@@ -173,7 +184,7 @@ guardColGE (LineIndent a) (LineIndent e) =
 --
 -- CONTINUATION: content at col >= lineIndent (same level as parent).
 --   Used for then/else, with, match arms, let-in items, closing delimiters.
---   Does NOT set envFoldCol — compound constructs open their own folds.
+--   Does NOT set envFoldCol - compound constructs open their own folds.
 --
 -- CHILD blocks (col > envFoldCol guard + sequence parsing) are handled
 -- by childBlock in Expr.hs, using the indent helpers from this module.
