@@ -11,7 +11,7 @@ import Foglang.Parser.IntLit (intLit)
 import Foglang.Parser.Patterns (pattern')
 import Foglang.Parser.StringLit (stringLit)
 import Foglang.Parser.Types (params, typeExpr)
-import Text.Megaparsec (Pos, SourcePos, getSourcePos, many, optional, some, try, (<|>))
+import Text.Megaparsec (Pos, getSourcePos, many, optional, some, try, (<|>))
 import Text.Megaparsec.Char (string)
 import Text.Megaparsec.Pos (sourceLine)
 
@@ -86,52 +86,64 @@ letExpr itemLi = do
 -- ----------------------------------------------------------------------------
 -- Expression parser
 --
--- The inner loop of a fold: atoms + operators using the ambient fold SC.
--- Compound constructs (func, match, if) nest child blocks within the fold.
+-- Parse an expression in context of an enclosing fold.
+--
+-- Two-layer makeExprParser (hierarchy: atom < term < expr), so tight
+-- postfixes bind tighter than application (`f a[0]` = `f (a[0])`):
+--   * mainOpTable over term    - application + infix operators
+--   * postfixOpTable over atom - tight postfixes (indexing)
 
 expr :: Parser Expr
-expr = makeExprParser atom operatorTable
+expr = makeExprParser term mainOpTable
   where
-    atom :: Parser Expr
-    atom =
-      try funcExpr
-        <|> try matchExpr
-        <|> try ifExpr
-        <|> try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> lexeme floatLit)
-        <|> try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> lexeme intLit)
-        <|> try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> lexeme stringLit)
-        <|> try sliceLit
-        <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ symbol "{}")
-        <|> try indexableVar
-        <|> try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ symbol "()")
-        <|> indexableParen
+    term :: Parser Expr
+    term = lexeme $ makeExprParser atom postfixOpTable
+        where
+          atom :: Parser Expr
+          atom =
+            funcExpr
+              <|> matchExpr
+              <|> ifExpr
+              <|> try (do p <- getSourcePos; t <- freshTConstrained tsFloat; EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit)
+              <|> try (do p <- getSourcePos; t <- freshTConstrained tsInt; EIntLit ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit)
+              <|> try (do p <- getSourcePos; EStrLit ExprAnn {pos = p, ty = TNamed (Ident "string"), isStmt = False} <$> stringLit)
+              <|> sliceLit
+              <|> try (do p <- getSourcePos; t <- freshTVar; EMapLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}")
+              <|> try (do p <- getSourcePos; t <- freshTVar; EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent)
+              <|> try (do p <- getSourcePos; EUnitLit ExprAnn {pos = p, ty = UnitType, isStmt = False} <$ string "()")
+              <|> parenExpr
 
-    -- Parse zero or more [expr] index suffixes, then consume trailing
-    -- whitespace. The identifier/paren is parsed WITHOUT trailing whitespace
-    -- first, so we can distinguish foo[x] (index) from foo [x] (application).
-    withIndexSuffix :: Expr -> Parser Expr
-    withIndexSuffix base = do
-      idxs <- many (try $ do p <- getSourcePos; t <- freshTVar; idx <- string "[" *> expr <* symbol "]"; return (p, t, idx))
-      runEnvSC
-      return $ foldl (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
+          -- `some` chains multiple `[...]` suffixes in one Postfix invocation;
+          -- makeExprParser's Postfix only fires once per term otherwise.
+          -- withoutSemicolons stops the closing `]`'s continuation from eating
+          -- a stray `;` when we're inside a paren's semicolon-aware context.
+          indexExpr :: Operator Parser Expr
+          indexExpr = Postfix $ withoutSemicolons $ do
+            idxs <- some $ do
+              p <- getSourcePos
+              _ <- string "["
+              t <- freshTVar
+              runEnvSC
+              idx <- expr
+              foldCol <- asks envFoldCol
+              _ <- continuation foldCol (string "]")
+              return (p, t, idx)
+            return $ \base ->
+              foldl' (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
 
-    indexableVar :: Parser Expr
-    indexableVar = do
-      p <- getSourcePos
-      t <- freshTVar
-      EVar ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent >>= withIndexSuffix
+          postfixOpTable :: [[Operator Parser Expr]]
+          postfixOpTable = [[indexExpr]]
 
     -- Parens: delimited by ( ), semicolons are valid separators inside.
     -- Content obeys the enclosing fold's indentation rules.
-    indexableParen :: Parser Expr
-    indexableParen = do
+    parenExpr :: Parser Expr
+    parenExpr = do
       _ <- string "("
       runEnvSC
       inner <- withSemicolons exprSequence
       foldCol <- asks envFoldCol
-      -- string not symbol: no trailing whitespace so (e)[x] (index) vs (e) [x] (application)
       _ <- continuation foldCol (string ")")
-      withIndexSuffix inner
+      return inner
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
@@ -154,7 +166,7 @@ expr = makeExprParser atom operatorTable
             rest <- many $ try $ continuation itemLi oneItem
             return (first : rest)
       foldCol <- asks envFoldCol
-      _ <- continuation foldCol (symbol "]")
+      _ <- continuation foldCol (string "]")
       t <- freshTVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
 
@@ -251,13 +263,13 @@ expr = makeExprParser atom operatorTable
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
       args <- some $ do
-        e <- atom
+        e <- term
         (do t <- freshTVar; EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e <$ symbol "...") <|> pure e
       t <- freshTVar
       return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)
 
-    operatorTable :: [[Operator Parser Expr]]
-    operatorTable =
+    mainOpTable :: [[Operator Parser Expr]]
+    mainOpTable =
       [ [applicationExpr],
         [InfixL (opParser "*"), InfixL (opParser "/"), InfixL (opParser "%"), InfixL (opParser "<<<"), InfixL (opParser ">>>"), InfixL (opParser "&&&")],
         [InfixL (opParser "+"), InfixL (opParser "-"), InfixL (opParser "|||"), InfixL (opParser "^^^")],
