@@ -59,8 +59,8 @@ newtype StringLit = StringLit T.Text
 
 -- Constraint sets for type variables introduced by literals.
 data TypeSet = TypeSet
-  { tsMembers :: Set.Set Ident
-  , tsDefault :: Ident
+  { tsMembers :: Set.Set Ident,
+    tsDefault :: Ident
   }
   deriving (Eq, Show)
 
@@ -69,14 +69,14 @@ tsInt = TypeSet
   { tsMembers = Set.fromList $ map Ident
       ["int", "int8", "int16", "int32", "int64",
        "uint", "uint8", "uint16", "uint32", "uint64",
-       "uintptr", "byte", "rune"]
-  , tsDefault = Ident "int"
+       "uintptr", "byte", "rune"],
+    tsDefault = Ident "int"
   }
 
 tsFloat :: TypeSet
 tsFloat = TypeSet
-  { tsMembers = Set.fromList $ map Ident ["float32", "float64"]
-  , tsDefault = Ident "float64"
+  { tsMembers = Set.fromList $ map Ident ["float32", "float64"],
+    tsDefault = Ident "float64"
   }
 
 data TypeExpr
@@ -138,9 +138,9 @@ bindingType ps retTy = TFunc fixedTys mVarTy retTy
 -- (with TVars for unknown types); inference resolves ty; a post-inference
 -- pass computes isStmt.
 data ExprAnn = ExprAnn
-  { pos    :: SourcePos
-  , ty     :: TypeExpr
-  , isStmt :: Bool
+  { pos    :: SourcePos,
+    ty     :: TypeExpr,
+    isStmt :: Bool
   } deriving (Eq, Show)
 
 -- The kind of implicit coercion applied at a type boundary.

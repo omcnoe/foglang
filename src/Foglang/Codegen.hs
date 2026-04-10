@@ -191,8 +191,8 @@ genMatchBody :: Scope -> BodyMode -> Int -> Expr -> [MatchArm] -> T.Text
 genMatchBody _ _ _ _ [] = ""
 genMatchBody scope mode indent tscrut arms =
   let (tupleArity, hasNonTupleArm) =
-        foldr
-          ( \(MatchArm _ p _) (arity, hasNon) -> case p of
+        foldl'
+          ( \(arity, hasNon) (MatchArm _ p _) -> case p of
               PtTuple pats -> (max arity (length pats), hasNon)
               _ -> (arity, True)
           )
@@ -464,7 +464,7 @@ genPackageLevel scope (ELet _ n (Binding p t trhs) mtin) =
     Nothing -> (declText, scope')
     Just tin -> let (rest, scope'') = genPackageLevel scope' tin in (declText <> rest, scope'')
 genPackageLevel scope (ESequence _ texprs) =
-  foldl (\(acc, s) e -> let (t, s') = genPackageLevel s e in (acc <> t, s')) ("", scope) texprs
+  foldl' (\(acc, s) e -> let (t, s') = genPackageLevel s e in (acc <> t, s')) ("", scope) texprs
 genPackageLevel scope e
   | isStmt (exprAnn e) = ("func init() {\n" <> genBody scope Void 1 e <> "}\n", scope)
   | otherwise = error $ "unsupported top-level expression: " <> show e
