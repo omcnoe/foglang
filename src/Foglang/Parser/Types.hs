@@ -15,7 +15,7 @@ param = unit <|> try typed <|> try parens <|> bare
       _ <- symbol "("
       name <- lexeme ident
       _ <- symbol ":"
-      mVariadic <- optional (try (string "..."))
+      mVariadic <- optional (symbol "...")
       ty <- typeExpr
       foldCol <- asks envFoldCol
       _ <- continuation foldCol (symbol ")")
@@ -78,7 +78,7 @@ funcTypeExpr = do
       return $ TFunc [UnitType] Nothing retTy
     Nothing -> do
       fixedTys <- many (try (typeExpr <* optional (symbol "->")))
-      mVarTy <- optional (try (string "..." *> typeExpr))
+      mVarTy <- optional (try (symbol "..." *> typeExpr))
       case (fixedTys, mVarTy) of
         ([], Nothing) -> fail "function type with no parameters"
         _ -> do

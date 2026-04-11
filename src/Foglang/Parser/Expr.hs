@@ -100,7 +100,7 @@ expr = makeExprParser term termOpTable
     term = lexeme $ makeExprParser atom atomOpTable
 
     atomOpTable :: [[Operator Parser Expr]]
-    atomOpTable = [[indexOp]]
+    atomOpTable = [[indexOp], [spreadOp]]
 
     termOpTable :: [[Operator Parser Expr]]
     termOpTable =
@@ -113,6 +113,10 @@ expr = makeExprParser term termOpTable
         [InfixL (infixOp "||")]
       ]
 
+    -- Basic atom parser.
+    -- Does NOT consume trailing whitespace as tight binding indexOp is
+    -- leading whitespace sensitive, to distinguish eg. `f [0]` (application)
+    -- from `f[0]` (indexing).
     atom :: Parser Expr
     atom =
         floatLitExpr -- must come before intLitExpr to resolve ambigous prefix case: 123.456 parses as valid int 123 leaving dangling .456
@@ -127,7 +131,9 @@ expr = makeExprParser term termOpTable
         <|> matchExpr
         <|> ifExpr
 
-    -- `some` chains multiple `[...]` suffixes in one Postfix invocation;
+    -- Indexing: `xs[i]`.
+    -- Leading hitespace sensitive - `xs [i]` is application with slice lit.
+    -- `some` chains multiple `[...]` suffixes in one Postfix invocation,
     -- makeExprParser's Postfix only fires once per term otherwise.
     -- withoutSemicolons stops the closing `]`'s continuation from eating
     -- a stray `;` when we're inside a paren's semicolon-aware context.
@@ -144,6 +150,16 @@ expr = makeExprParser term termOpTable
         return (p, t, idx)
       return $ \base ->
         foldl' (\b (p, t, idx) -> EIndex ExprAnn {pos = p, ty = t, isStmt = False} b idx) base idxs
+
+    -- Variadic spread: `xs...` or `xs ...`.
+    -- Unlike indexOp, not leading whitespace sensitive. Only valid inside
+    -- variadic function application - checked during type inference.
+    spreadOp :: Operator Parser Expr
+    spreadOp = Postfix $ try $ do
+      runEnvSC
+      _ <- string "..."
+      t <- freshTVar
+      return $ \base -> EVariadicSpread ExprAnn {pos = exprPos base, ty = t, isStmt = False} base
 
     -- Parse an infix operator with boundary check.
     infixOp :: T.Text -> Parser (Expr -> Expr -> Expr)
@@ -281,9 +297,6 @@ expr = makeExprParser term termOpTable
 
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
-      args <- some $ do
-        e <- term
-        -- TODO variadic spread should be handled properly as a real operator rather than hardcoded inside applicationExpr parser
-        (symbol "..." *> (do t <- freshTVar; pure $ EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e)) <|> pure e
+      args <- some term
       t <- freshTVar
       return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)
