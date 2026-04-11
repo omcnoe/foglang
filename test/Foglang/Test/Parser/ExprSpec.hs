@@ -232,6 +232,58 @@ spec = do
           "match x with\n| 0 => 1\n| _ => 2"
         ]
 
+  let validEIndex =
+        [ -- Single
+          ("xs[0]", EIndex a (EVar a "xs") (EIntLit a (IntDecimal "0"))),
+          -- Nested
+          ( "m[0][1]",
+            EIndex a
+              (EIndex a (EVar a "m") (EIntLit a (IntDecimal "0")))
+              (EIntLit a (IntDecimal "1"))
+          ),
+          -- Tight (no space): index
+          ("f[xs]", EIndex a (EVar a "f") (EVar a "xs")),
+          -- Space: application with slice-literal argument
+          ( "f [xs]",
+            EApplication a (EVar a "f") [ESliceLit a [EVar a "xs"]]
+          ),
+          -- Indexing binds tighter than application: `f xs[0]` = `f (xs[0])`, not `(f xs)[0]`
+          ( "f xs[0]",
+            EApplication a (EVar a "f") [EIndex a (EVar a "xs") (EIntLit a (IntDecimal "0"))]
+          ),
+          -- Symmetric: indexed function applied to arg
+          ( "f[0] x",
+            EApplication a (EIndex a (EVar a "f") (EIntLit a (IntDecimal "0"))) [EVar a "x"]
+          ),
+          -- Slice literal indexing
+          ( "[1; 2; 3][2]",
+            EIndex a
+              (ESliceLit a [EIntLit a (IntDecimal "1"), EIntLit a (IntDecimal "2"), EIntLit a (IntDecimal "3")])
+              (EIntLit a (IntDecimal "2"))
+          ),
+          -- Index-via-subexpression
+          ( "xs[f 1+2/3]",
+            EIndex a
+              (EVar a "xs")
+              ( EInfixOp a
+                  (EApplication a (EVar a "f") [EIntLit a (IntDecimal "1")])
+                  "+"
+                  (EInfixOp a (EIntLit a (IntDecimal "2")) "/" (EIntLit a (IntDecimal "3")))
+              )
+          ),
+          -- Multi-line: index content on continuation lines
+          ( "xs[\n\
+            \  77\n\
+            \]",
+            EIndex a (EVar a "xs") (EIntLit a (IntDecimal "77"))
+          )
+        ]
+
+  let invalidEIndex =
+        [ "xs[]",     -- empty brackets
+          "xs[0; 1]"  -- semicolons inside brackets (withoutSemicolons should reject)
+        ]
+
   let validEApplication =
         [ ("f x", EApplication a (EVar a "f") [EVar a "x"]),
           ("f x y", EApplication a (EVar a "f") [EVar a "x", EVar a "y"]),
@@ -381,6 +433,8 @@ spec = do
       mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validParen
     it "application" $
       mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validEApplication
+    it "index" $
+      mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validEIndex
     it "lambda with untyped params" $
       mapM_ (\(s, expected) -> fmap stripPos (parseExpr s) `shouldBe` Right expected) validELambda
 
@@ -405,3 +459,5 @@ spec = do
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidParen
     it "invalid match (flush arms)" $
       mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidMatch
+    it "invalid index" $
+      mapM_ (\s -> parseExpr s `shouldSatisfy` isLeft) invalidEIndex
