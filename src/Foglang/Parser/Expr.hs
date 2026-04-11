@@ -119,7 +119,7 @@ expr = makeExprParser term termOpTable
         <|> intLitExpr
         <|> stringLitExpr
         <|> sliceLit
-        <|> mapLitExpr
+        <|> mapLitExpr -- TODO need proper map lit impl
         <|> varExpr
         <|> unitLitExpr -- must come before parenExpr to resolve ambigous empty paren case: () is EUnitLit not empty ESequence
         <|> parenExpr
@@ -152,9 +152,9 @@ expr = makeExprParser term termOpTable
       t <- freshTVar
       return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
 
-    floatLitExpr  = do p <- getSourcePos; t <- freshTConstrained tsFloat;      EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} <$> floatLit
-    intLitExpr    = do p <- getSourcePos; t <- freshTConstrained tsInt;        EIntLit   ExprAnn {pos = p, ty = t, isStmt = False} <$> intLit
-    stringLitExpr = do p <- getSourcePos; t <- pure $ TNamed $ Ident "string"; EStrLit   ExprAnn {pos = p, ty = t, isStmt = False} <$> stringLit
+    floatLitExpr  = do p <- getSourcePos; lit <- floatLit;  t <- freshTConstrained tsFloat;      pure $ EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} lit
+    intLitExpr    = do p <- getSourcePos; lit <- intLit;    t <- freshTConstrained tsInt;        pure $ EIntLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
+    stringLitExpr = do p <- getSourcePos; lit <- stringLit; t <- pure $ TNamed $ Ident "string"; pure $ EStrLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
@@ -181,9 +181,9 @@ expr = makeExprParser term termOpTable
       t <- freshTVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
 
-    mapLitExpr  = do p <- getSourcePos; t <- freshTVar;       EMapLit  ExprAnn {pos = p, ty = t, isStmt = False} <$ string "{}"
-    varExpr     = do p <- getSourcePos; t <- freshTVar;       EVar     ExprAnn {pos = p, ty = t, isStmt = False} <$> qualIdent
-    unitLitExpr = do p <- getSourcePos; t <- pure $ UnitType; EUnitLit ExprAnn {pos = p, ty = t, isStmt = False} <$ string "()"
+    mapLitExpr  = do p <- getSourcePos; _  <- string "{}"; t <- freshTVar;     pure $ EMapLit  ExprAnn {pos = p, ty = t, isStmt = False}
+    varExpr     = do p <- getSourcePos; qi <- qualIdent;   t <- freshTVar;     pure $ EVar     ExprAnn {pos = p, ty = t, isStmt = False} qi
+    unitLitExpr = do p <- getSourcePos; _  <- string "()"; t <- pure UnitType; pure $ EUnitLit ExprAnn {pos = p, ty = t, isStmt = False}
 
     -- Parens: delimited by ( ), semicolons are valid separators inside.
     -- Content obeys the enclosing fold's indentation rules.
@@ -283,6 +283,7 @@ expr = makeExprParser term termOpTable
     applicationExpr = Postfix $ do
       args <- some $ do
         e <- term
-        (do t <- freshTVar; EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e <$ symbol "...") <|> pure e
+        -- TODO variadic spread should be handled properly as a real operator rather than hardcoded inside applicationExpr parser
+        (symbol "..." *> (do t <- freshTVar; pure $ EVariadicSpread ExprAnn {pos = exprPos e, ty = t, isStmt = False} e)) <|> pure e
       t <- freshTVar
       return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)
