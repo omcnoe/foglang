@@ -2,7 +2,7 @@
 
 ## Overview
 
-Foglang uses constraint-based type inference. Type annotations are optional everywhere - on local bindings, function parameters, return types, and top-level definitions. When a type is omitted, the compiler assigns a type variable (TypeVar) and resolves it from context.
+Foglang uses constraint-based type inference with union-find substitution. Type annotations are optional everywhere — on local bindings, function parameters, return types, and top-level definitions. When a type is omitted, the compiler assigns a fresh type variable and resolves it from context.
 
 ```
 let add x y = x + y + 1       // inferred: int -> int => int
@@ -10,29 +10,86 @@ let greeting = "hello"        // inferred: string
 let double (x : int) = x * 2  // param annotated, return type inferred
 ```
 
-When the user does provide an annotation, the compiler uses it as a constraint. Annotations are never ignored - they anchor inference and produce better error messages.
+When the user provides an annotation, the compiler uses it as a constraint. Annotations are never ignored — they anchor inference and produce better error messages.
 
-Inference is monomorphic - there is no let-polymorphism or generalization. Each binding gets a single concrete type. Polymorphism will be introduced later alongside explicit generics.
+Inference is monomorphic — there is no let-polymorphism or generalisation. Each binding gets a single concrete type. Polymorphism will be introduced later alongside explicit generics.
 
 ## Source positions
 
-Every AST node carries a source position (row and column). This is required for meaningful error messages from type inference - "type mismatch: int vs string at line 12, column 5".
+Every AST node carries a source position (row and column). This is required for meaningful error messages from type inference — "type mismatch: int vs string at line 12, column 5".
 
-## Type variables
+## Type representation
 
-A type variable (`TypeVar n`) represents an unknown type, identified by a unique integer. A constrained type variable (`TypeVarConstrained n ts`) represents a type variable that must resolve to a member of a type set. An indexable type variable (`TypeVarIndexable n tk tv`) represents a type variable that must resolve to an indexable type (able to use indexing `[x]` postfix operator). `TypeVarConstrained` and `TypeVarIndexable` are placeholders until the type system is more powerful and able to represent such concepts natively. TypeVars, TypeVarConstrained and TypeVarIndexable appear in `TypeExpr` alongside concrete types.
+The type representation is layered into three data types:
 
+### `TypeExpr` — surface / inference-time
 
-TypeVars are introduced by the parser everywhere a type is not explicitly known:
-- Unannotated parameters, return types, and value bindings
+At parse time and during inference, every expression's `ty` slot holds a `TypeExpr`:
 
-Constrained type variables are introduced for numeric literals:
-- Integer literals - `EIntLit (TypeVarConstrained n tsInt) 1`
-- Float literals - `EFloatLit (TypeVarConstrained n tsFloat) 2.0`
+```haskell
+data TypeExpr
+  = TVar !Int                -- variable; resolve via Subst.find
+  | TShape !ConcreteShape    -- fully concrete structural type
+```
 
-String literals get `TNamed "string"` directly (no TypeVar needed - there is only one string type).
+`ConcreteShape` is structural-only — it cannot be a bare variable at its root, though its children may still be `TypeExpr`s (which can in turn be variables):
 
-Every expression in the AST carries a type slot. The parser populates it with either the user's annotation or a fresh TypeVar. Since the AST and typed AST have identical structure, there is a single unified `Expr` type used throughout the pipeline - no separate TAST. The parser emits `Expr` with TypeVars, inference resolves TypeVars in-place (via substitution), and codegen reads the resolved types from the same `Expr`.
+```haskell
+data ConcreteShape
+  = CNamed !Ident
+  | CSlice !TypeExpr
+  | CMap   !TypeExpr !TypeExpr
+  | CFunc  ![TypeExpr] !(Maybe TypeExpr) !TypeExpr
+```
+
+Crucially, neither `TypeExpr` nor `ConcreteShape` carries any notion of a constraint. Constraints live exclusively in the substitution (see below). This structural separation is enforced by the type system — there is no way to write a constrained variable at an `Expr` annotation site.
+
+### `Type` — ground / codegen input
+
+After inference, every `Expr` node's `ty` is a fully ground `Type`:
+
+```haskell
+data Type
+  = TyNamed !Ident
+  | TySlice !Type
+  | TyMap   !Type !Type
+  | TyFunc  ![Type] !(Maybe Type) !Type
+```
+
+`Type` has no variable constructor. An `Expr Type` (the codegen input) cannot possibly contain an unresolved variable — the type system prevents it.
+
+### `Subst` — union-find substitution
+
+The substitution is a union-find forest:
+
+```haskell
+data UFEntry
+  = Link !Int                -- forward to another variable
+  | Root !RootContent        -- representative of an equivalence class
+
+data RootContent
+  = RConcrete   !ConcreteShape
+  | RConstraint !Constraint
+
+data Constraint
+  = CNumeric   !TypeSet            -- numeric literal (int-ish or float-ish)
+  | CIndexable !TypeExpr !TypeExpr -- must support `x[k]` with key/value
+```
+
+A TypeVar ID absent from the map is unbound. Present with a `Link` points to another ID. Present with a `Root` is the representative of its equivalence class — either bound to a concrete shape, or carrying a constraint that hasn't been narrowed to a shape yet.
+
+`find` walks the Link chain to the representative, with path compression on each traversal (intermediate nodes get rewritten to point directly at the root). This keeps lookup amortised near-linear across the whole inference — the map-based substitution's O(N²) failure mode on deeply-nested indexable chains is gone.
+
+### `Expr` — parametric over type payload
+
+`Expr`, `Binding`, `ExprAnn`, `MatchArm`, `Param`, and `FogFile` are all parametric over the type payload:
+
+```haskell
+data ExprAnn t = ExprAnn { pos :: SourcePos, ty :: !t, isStmt :: !Bool }
+data Expr    t = EVar (ExprAnn t) Ident | ...
+```
+
+Parser produces `Expr TypeExpr`; inference returns `Expr Type`; codegen consumes `Expr Type`. The pipeline's phase transition is the signature of `inferAndResolve :: (Expr TypeExpr, ParserState) -> Either [InferError] (Expr Type)`.
 
 ## Parameter syntax
 
@@ -44,88 +101,94 @@ let f (x) (y) = x + y                // parenthesised, type omitted
 let f x y = x + y                    // bare identifier
 ```
 
-All three produce the same AST structure. Unannotated params get a `TypeVar` in the type slot.
+All three produce the same AST structure. Unannotated params get a fresh `TVar` in the type slot.
 
 ### Bare parameter parsing
 
 After parsing `let name`, the parser greedily consumes bare identifiers and parenthesized params. Then it dispatches on the next token:
 
-- `=>` - function with explicit return type: `let f x y => int = x + y`
-- `=` with params collected - function with inferred return type: `let f x y = x + y`
-- `=` with no params collected - value binding with inferred type: `let x = 5`
-- `:` - value binding with explicit type (no params): `let x : int = 5`
+- `=>` — function with explicit return type: `let f x y => int = x + y`
+- `=` with params collected — function with inferred return type: `let f x y = x + y`
+- `=` with no params collected — value binding with inferred type: `let x = 5`
+- `:` — value binding with explicit type (no params): `let x : int = 5`
 
 The `=` sign is the unambiguous boundary between params and body. The presence or absence of collected params before `=` distinguishes functions from value bindings.
 
 Bare and annotated params can be mixed: `let f x (y : int) = x + y`.
 
-## Inference process
+## Inference pipeline
 
-Inference has two phases.
+Inference has two phases, implemented in `Foglang.Inference.inferAndResolve`:
 
-### Phase 1: Constraint generation
+### Phase 1: Constraint generation + unification
 
-Walk the AST and collect a list of constraints. Each constraint is a triple `(TypeExpr, TypeExpr, SrcPos)` - two types that must be equal, plus the source position that generated the constraint. The source position is used for error messages when unification fails.
+Walk the `Expr TypeExpr` tree. At every node, call `unifyM` to unify expected vs inferred types. `unifyM` modifies the shared `Subst` in the `Infer` monad state.
 
-#### Expressions
+The parser minted a fresh `TVar` for each literal; `inferExpr` attaches constraints when it first visits the node:
 
-| Expression | Constraint |
-|---|---|
-| `let x : T = e` | type of `e` ~ `T`; `Binding`'s return type ~ `T` |
-| `let x = e` | type of `x` (a TypeVar) ~ type of `e`; `Binding`'s return type (a TypeVar) ~ type of body |
-| `x` (variable ref) | TypeVar of the `EVar` node ~ type looked up from environment |
-| `f x` | type of `x` ~ param type of `f`, result ~ return type of `f` |
-| `f a b c` (multi-arg) | each arg unified with corresponding param type; result type accounts for partial application if fewer args than params |
-| `if c then a else b` | type of `c` ~ `bool`, type of `a` ~ type of `b` |
-| `func (x) = body` | result type is `TFunc` built from param types and body type; `Binding`'s return type ~ type of body |
-| `e1; e2; e3` (sequence) | result type ~ type of last expression; intermediate expressions must still be fully resolved (for future diagnostics like "result discarded" warnings) but do not constrain the sequence's result type |
-| `()` (unit literal) | type is `TNamed "()"` - no TypeVar needed |
-| `42` | already carries a `TypeVar` from the parser; constrained by context |
-| `3.14` | already carries a `TypeVar` from the parser; constrained by context |
-| `"str"` | already carries a `TypeVar` from the parser; constrained by context |
-| `[a, b, c]` | type of `a` ~ type of `b` ~ type of `c`, result ~ `TSlice(type of a)` |
-| `[]` (empty slice) | result ~ `TSlice(TypeVar n)` - element type resolved by context |
-| `{}` (empty map) | result ~ `TMap(TypeVar k, TypeVar v)` - key/value types resolved by context |
-| `e[idx]` | container `e` stays as its TypeVar until context resolves whether it is a slice or map; once resolved, index type and result type are constrained (slice: `idx` ~ `int`, result ~ element type; map: `idx` ~ key type, result ~ value type) |
-| `xs...` (spread) | `xs` ~ `TSlice(T)` where `T` is the variadic param type |
+- `EIntLit a _`   — binds the annotation's TVar to `Root (RConstraint (CNumeric tsInt))`.
+- `EFloatLit a _` — binds to `Root (RConstraint (CNumeric tsFloat))`.
+- `EStrLit`       — parser already assigns `TShape (CNamed "string")` directly (only one string type).
+- `EUnitLit`      — parser assigns `UnitTypeExpr = TShape (CNamed "()")`.
+- `EIndex`        — mints a fresh TVar bound to `Root (RConstraint (CIndexable keyTy valTy))`, then unifies the container expression against that TVar.
+- `EVar`          — looks up the environment's type and unifies.
+
+Unification dispatches on the current `TypeView` of each side (shape / unbound var / constrained var):
+
+| LHS | RHS | Action |
+|---|---|---|
+| wildcard shape | anything | succeed, no binding |
+| `VVarUnbound a` | `VVarUnbound b` | `bindLink a b` |
+| `VVarUnbound a` | `VVarConstraint b c` | `bindLink a b` (preserve the constraint on b) |
+| `VVarUnbound a` | `VShape c` | occurs-check, then `bindConcrete a c` |
+| `VVarConstraint a k1` | `VVarConstraint b k2` | unify constraints, `bindLink b a` |
+| `VVarConstraint a k` | `VShape c` | promote: `unifyConstraintShape` — if c satisfies k, `bindConcrete a c`; else error |
+| `VShape c1` | `VShape c2` | head-to-head `unifyShapes`, recursing into children |
+
+Constraint–shape promotion:
+- `CNumeric ts` vs `CNamed name` — if `name ∈ ts`, bind; else `TypeMismatch`.
+- `CIndexable k v` vs `CSlice elem` — unify `k ~ int`, `v ~ elem`, bind to `CSlice`.
+- `CIndexable k v` vs `CMap mk mv` — unify `k ~ mk`, `v ~ mv`, bind to `CMap`.
+- `CIndexable k v` vs `CNamed "string"` — unify `k ~ int`, `v ~ byte`, bind to `CNamed "string"`.
+- `CIndexable` vs anything else — `NotAnIndexable`.
+
+#### Occurs check
+
+Before binding `TVar n` to a shape, walk the shape (through the substitution, via `find`) to see whether `n` reappears transitively. If it does, the binding would create a cyclic type, so raise `InfiniteType`. This does not affect user-defined recursive types (future ADTs), since those recurse through named types, not through TypeVars.
 
 #### Operators
 
-All infix operators generate constraints on their operands. Foglang does not enforce numeric constraints on arithmetic operators at the inference level - the Go compiler catches operand type mismatches (e.g. `"a" - "b"`) during compilation. This is acceptable because inference guarantees operand types match each other; Go validates that the operation is defined for that type.
-
 | Operator | Constraints |
 |---|---|
-| `x + y`, `x - y`, `x * y`, `x / y`, `x % y` | type of `x` ~ type of `y`, result ~ type of `x` |
-| `x == y`, `x != y`, `x < y`, `x > y`, `x <= y`, `x >= y` | type of `x` ~ type of `y`, result ~ `bool` |
-| `x && y`, `x \|\| y` | type of `x` ~ type of `y`, result ~ `bool` |
-| `x \|\|\| y`, `x &&& y`, `x ^^^ y`, `x <<< y`, `x >>> y` | type of `x` ~ type of `y`, result ~ type of `x` |
-| `x :: xs` | type of `xs` ~ `TSlice(type of x)`, result ~ type of `xs` |
+| `x + y`, `x - y`, `x * y`, `x / y`, `x % y` | `x ~ y`, result ~ type of `x` |
+| `x == y`, `!=`, `<`, `>`, `<=`, `>=` | `x ~ y`, result ~ `bool` |
+| `x && y`, `x \|\| y` | `x ~ y`, result ~ `bool` |
+| `x \|\|\| y`, `&&&`, `^^^`, `<<<`, `>>>` | `x ~ y`, result ~ type of `x` |
+| `x :: xs` | `xs ~ TSlice(type of x)`, result ~ type of `xs` |
+
+Foglang does not enforce numeric constraints on arithmetic operators at the inference level — the Go compiler catches operand type mismatches during compilation. This is acceptable because inference guarantees operand types match each other.
 
 #### Pattern matching
-
-Match expressions generate constraints from the scrutinee and each arm's pattern:
 
 | Pattern | Constraint |
 |---|---|
 | `_` | none |
 | `x` (variable) | binds `x` with type of scrutinee |
-| `42` (int literal) | scrutinee ~ `TypeVarConstrained n TSInt` (a fresh constrained variable) |
+| `42` (int literal) | scrutinee ~ fresh `TVar` constrained with `CNumeric tsInt` |
 | `true` / `false` | scrutinee ~ `bool` |
-| `[]` | scrutinee ~ `TSlice(TypeVar n)` |
-| `hd :: tl` | scrutinee ~ `TSlice(TypeVar n)`, `hd` bound as `TypeVar n`, `tl` bound as scrutinee type |
-| `(a, b)` | tuple components bound with fresh TypeVars (constrained by usage in arm body); tuples arise from Go multi-return (e.g. map comma-ok) and have no `TupleType` in `TypeExpr` - components remain opaque unless constrained by usage |
+| `[]` | scrutinee ~ `TShape (CSlice (TVar n))` |
+| `hd :: tl` | scrutinee ~ `TShape (CSlice (TVar n))`, `hd` bound as `TVar n`, `tl` bound as scrutinee type |
+| `(a, b)` | tuple components bound with fresh TVars (constrained by usage in arm body) |
 
 All arm bodies must have the same type (the result type of the match expression).
 
 #### Variadic functions
 
-Variadic parameters (`(args : ...T)`) generate constraints: each argument in the variadic position must unify with `T`. Spread expressions (`xs...`) constrain `xs` ~ `TSlice(T)`.
+Variadic parameters (`(args : ...T)`) generate constraints: each argument in the variadic position must unify with `T`. Spread expressions (`xs...`) constrain `xs ~ TShape (CSlice T)`.
 
 ## Opaque and any types
 
-Qualified names (e.g. `fmt.Println`) and Go builtins (`len`, `append`) have opaque types. The `any` type (Go's empty interface) behaves identically to opaque for unification purposes.
-
-Both `opaque` and `any` unify freely with any type - the wildcard check fires before any TypeVar binding, so the substitution is unchanged.
+Qualified names (e.g. `fmt.Println`) and Go builtins (`len`, `append`) have opaque types. The `any` type (Go's empty interface) behaves identically to opaque for unification. Both unify freely — the wildcard check short-circuits unification without recording a binding.
 
 Future work: parse Go stdlib source or query the Go compiler to obtain real type signatures, replacing opaque with concrete types.
 
@@ -133,66 +196,62 @@ Future work: parse Go stdlib source or query the Go compiler to obtain real type
 
 `()` and `struct{}` are distinct named types that unify successfully during inference. This is necessary because fog uses `()` as the unit type while Go represents it as `struct{}`. Without this, passing a `struct{}`-returning Go function's result to a fog function expecting `()` would produce a false type error.
 
-The coercion between `()` and `struct{}` in generated Go code remains in codegen.
+The coercion between `()` and `struct{}` in generated Go code is inserted by `insertCoercions` after resolution, using `ECoerce FuncVoidCoerce`.
 
-### Phase 2: Solving (unification)
+### Phase 2: Resolution (with folded defaulting)
 
-Process constraints iteratively. For each constraint `(A, B, pos)`:
+`resolveExpr` walks the `Expr TypeExpr` tree once, converting every `TypeExpr` annotation to a ground `Type`. Threaded through the walk is the `Subst` — path-compression continues to help during resolution.
 
-- `TypeVarConstrained n S` ~ `TNamed t` -> if `t in S`, record `n = TNamed t`; otherwise type error
-- `TNamed t` ~ `TypeVarConstrained n S` -> same
-- `TypeVarConstrained n S1` ~ `TypeVarConstrained m S2` -> if `S1 == S2`, record `m = TypeVarConstrained n S1`; otherwise type error (e.g. int literal ~ float literal)
-- `TypeVarConstrained n S` ~ `TypeVar m` -> record `m = TypeVarConstrained n S` (propagate the constraint)
-- `TypeVar m` ~ `TypeVarConstrained n S` -> same
-- `TypeVar n` ~ `T` -> record `TypeVar n = T` in the substitution map, apply to remaining constraints
-- `T` ~ `TypeVar n` -> same
-- `TNamed a` ~ `TNamed b` -> success if `a == b`; also success if one is `()` and the other is `struct{}`; otherwise type error (report `pos`)
-- `int` ~ `string` -> type error (report `pos`)
-- `[]A` ~ `[]B` -> new constraint: `A` ~ `B`
-- `map[K1]V1` ~ `map[K2]V2` -> new constraints: `K1` ~ `K2`, `V1` ~ `V2`
-- `TFunc as va ra` ~ `TFunc bs vb rb` -> unify param lists element-wise: each `as[i]` ~ `bs[i]`; lists must have the same length (otherwise type error); unify variadic types: both `Nothing` (ok), both `Just t` (unify `t`s), one `Just` and one `Nothing` (type error); unify return types: `ra` ~ `rb`
-- `opaque` ~ `T` -> success (no substitution recorded)
-- `T` ~ `opaque` -> success (no substitution recorded)
-- `any` ~ `T` -> success (no substitution recorded)
-- `T` ~ `any` -> success (no substitution recorded)
+`resolveType`:
 
-The result is a substitution map from TypeVar IDs to concrete types. Apply it to the Expr tree, replacing every TypeVar with its solved type.
+- `TShape c` — recurse into the shape's children.
+- `TVar n` → `find n`:
+  - `FoundUnbound` — default to `OpaqueType` (`TyNamed "opaque"`).
+  - `FoundRoot _ (RConcrete c)` — recurse into `c`.
+  - `FoundRoot _ (RConstraint (CNumeric ts))` — default to `TyNamed (tsDefault ts)` (e.g. `int` for `tsInt`).
+  - `FoundRoot _ (RConstraint (CIndexable k v))` — recursively resolve `k` and `v` first, then decide:
+    - key resolves to a named int-ish type → `TySlice v`
+    - key resolves to any other named type (including opaque) → `TyMap k v`
+    - key resolves to something non-named (e.g. `TySlice` — only possible when a sibling indexable defaulted to slice) → `CannotInferType` error
 
-### Occurs check
+This structural recursion replaces the old iterative `defaultLoop`. Cascade dependencies resolve naturally via bottom-up walk: an indexable's key is resolved before the indexable itself, so by the time the indexable decides slice vs map, its key is already concrete.
 
-Before recording `TypeVar n = T`, verify that `TypeVar n` does not appear inside `T`. This prevents cyclic substitutions like `TypeVar 1 = []TypeVar 1` that would cause infinite loops during substitution application. This does not affect user-defined recursive types (future ADTs), since those recurse through named types, not through TypeVars.
+Failure short-circuits: the `Either [InferError]` monad stops at the first `CannotInferType`, so a pathologically deep unresolvable chain produces exactly one error, not O(N²) of them.
 
-## Bidirectional flow
+### Phase 3: `isStmt` annotation + coercion insertion
 
-When a type is already known from context, push it downward instead of generating a TypeVar and unifying later. For example, `let x : int32 = 42` - the `int32` annotation flows down into the literal during parsing, so it's assigned `int32` directly rather than getting a TypeVar that must be solved. This is an optimisation for directness and better error messages, not a separate mechanism.
+After resolution, two post-passes over `Expr Type`:
 
-## Defaulting
-
-After solving, walk the AST to default any remaining unresolved type variables:
-
-- `TypeVarConstrained n ts`: default to `tsDefault ts` (e.g. `int` for `tsInt`, `float64` for `tsFloat`). This applies regardless of which AST node the variable is on.
-- Standalone `TypeVar` on expression nodes: default to `opaque` (workaround for Go builtins like map access that interact with tuple-destructured variables having no type constraints; will be removed when fog models Go builtin signatures with real types).
-- `TypeVar` inside collection types (TSlice, TMap): default to `opaque` (e.g. empty slice/map literals whose element types were not constrained by context).
-- `TypeVar` as direct TFunc params/returns: NOT defaulted; these indicate genuine inference failures and are reported as `CannotInferType` errors.
+- `computeIsStmt` — bottom-up walk that marks each node with whether it or any child can stand as a Go statement. Used by codegen.
+- `insertCoercions` — inserts `ECoerce FuncVoidCoerce` nodes at type boundaries where function return types differ only in the `unit ↔ struct{}` dimension.
 
 ## Recursive functions
 
 A recursive function references itself in its own body. To handle this:
 
-1. Assign a `TypeVar` for the function's type
-2. Add the function to the environment with that `TypeVar`
-3. Infer the body, which generates constraints involving the `TypeVar`
-4. Unification resolves the `TypeVar` to the function's actual type
+1. The parser assigns a fresh `TVar` to the function's type.
+2. `inferLet` adds the function to the environment with that `TVar` *before* inferring the body.
+3. Inferring the body generates constraints involving the `TVar`.
+4. Unification resolves the `TVar` to the function's actual type.
 
-This is the same mechanism as any other binding - the recursion is not special-cased.
+This is the same mechanism as any other binding — the recursion is not special-cased.
 
 ## Interaction with codegen
 
-Codegen expects a fully resolved Expr tree with no TypeVars. After inference + solving + defaulting, every `TypeVar` must be replaced with a concrete type. If any `TypeVar` survives to codegen, that's a compiler bug.
+Codegen consumes `Expr Type`. Since `Type` has no variable constructor, it is structurally impossible for codegen to encounter an unresolved type — the phase transition happens at the signature boundary.
 
-## State
+## State and fresh variables
 
-The parser maintains a `nextTypeVar :: Int` counter to generate unique TypeVar IDs. The parser type is `ParsecT Void Text (ReaderT Env (State Int))`. State is the innermost monad, which means TypeVar IDs do not backtrack on parse failures (a failed branch that minted TypeVar 5 causes the next branch to mint TypeVar 6). This is harmless - IDs only need to be unique, not contiguous - but is incidental rather than intentional.
+The parser maintains a `pNextTypeVarId :: Int` counter to generate unique TypeVar IDs. `inferAndResolve` seeds inference's counter at `pNextTypeVarId` so fresh vars minted during inference can't collide with parser-minted ones.
 
-Inference maintains a `substitution :: Map Int TypeExpr` - the solved TypeVars. This can be threaded explicitly through function arguments or wrapped in a State monad - they are equivalent.
+The inference monad is `StateT InferState (Either InferError)`, where `InferState` holds the `Subst` and `iNextTypeVarId`. Short-circuit on first error via `Either`. Post-inference, resolution runs in a fresh `StateT Subst (Either [InferError])` so the compressed substitution threads through the resolve walk without the inference state getting in the way.
 
+## Performance characteristics
+
+Union-find with **path compression** (what's implemented here) gives amortised Θ(log n) per `find` operation, where n is the number of type variables. Total inference work is O(|program| · log n).
+
+Tarjan's classic O(α(n)) bound — α being the inverse Ackermann function — requires path compression **plus** union-by-rank. We have the former but not the latter; see the `TODO(perf)` in `Foglang.Subst`. In practice log n is plenty: n above ~1M is unrealistic for fog programs, so the gap between log n (~20) and α(n) (~4) is dwarfed by the constant factor of the IntMap operations.
+
+The map-based substitution this replaced was O(N²) on deeply-nested indexable chains because each use-site re-walked the chain from scratch. Path compression flattens as it traverses, so each chain is walked at most once across the entire pipeline.
+
+A regression test in `test/Foglang/Test/InferencePerfSpec.hs` stresses this with 256- and 1024-level pathological chains under wall-clock budgets.

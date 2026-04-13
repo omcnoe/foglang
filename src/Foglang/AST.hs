@@ -1,3 +1,8 @@
+{-# LANGUAGE DeriveFoldable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE PatternSynonyms #-}
+
 module Foglang.AST
   ( Ident (..),
     IntLit (..),
@@ -6,10 +11,21 @@ module Foglang.AST
     TypeSet (..),
     tsInt,
     tsFloat,
+    -- Inference-time type representation
+    ConcreteShape (..),
     TypeExpr (..),
+    tvarPos,
+    pattern UnitTypeExpr,
+    pattern OpaqueTypeExpr,
+    isUnitLikeShape,
+    isWildcardShape,
+    -- Ground type representation (codegen input)
+    GroundType (..),
     pattern UnitType,
+    pattern OpaqueType,
     isUnitLike,
     isWildcard,
+    -- Expr and friends, parametric over type payload
     ExprAnn (..),
     Param (..),
     Binding (..),
@@ -22,17 +38,18 @@ module Foglang.AST
     ImportDecl (..),
     Header (..),
     FogFile (..),
+    -- Accessors
     exprAnn,
     exprPos,
     exprType,
-    exprTypes,
     paramType,
     bindingType,
+    bindingTypeExpr,
   )
 where
 
-import Data.Set qualified as Set
 import Data.String (IsString (..))
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Text.Megaparsec.Pos (SourcePos)
 
@@ -79,169 +96,228 @@ tsFloat = TypeSet
     tsDefault = Ident "float64"
   }
 
+-- | A concrete structural type: never a bare variable at its root. Children
+-- (and grandchildren) may still be TypeExpr (which can be variables).
+-- Used on Expr annotations during inference and as the RConcrete payload in
+-- the substitution's union-find forest. Constraints (numeric / indexable)
+-- are NOT shapes - they live only in substitution Roots, never on tree nodes.
+data ConcreteShape
+  = CNamed !Ident
+  | CSlice !TypeExpr
+  | CMap   !TypeExpr !TypeExpr
+  | CFunc  ![TypeExpr] !(Maybe TypeExpr) !TypeExpr
+  deriving (Eq, Show)
+
+-- | Inference-time type annotation on Expr nodes.
+-- Either a pointer into the substitution (resolved via Foglang.Subst.find)
+-- or a fully concrete shape. Absence of variable variants carrying
+-- constraints is deliberate: constraints live in Subst Roots so that the
+-- invariant "a tree annotation is a resolvable reference or a shape" is
+-- enforced by the type system rather than by discipline.
+--
+-- The SourcePos on TVar is the position where the variable was minted
+-- (parser or inference). Used by resolveType to report CannotInferType at
+-- the exact hole. The manual Eq instance ignores this position so that
+-- structural comparison in tests is position-independent.
 data TypeExpr
-  = TNamed Ident -- named type, e.g. int, float64, bool, unit
-  | TSlice TypeExpr -- slice type, e.g. []int; also the type of a variadic parameter var inside a function body
-  | TMap TypeExpr TypeExpr -- map type, e.g. map[int][]int
-  | TFunc [TypeExpr] (Maybe TypeExpr) TypeExpr -- fixed param types, optional variadic param type, return type
-  -- type variables - resolved to concrete types during inference
-  -- TODO consider design that moves unresolved types out of TypeExpr - distinguish successful inference pass at Haskell type level
-  | TypeVar Int
-  -- TODO these are temporary until we have stronger type system that can represent such concepts natively
-  | TypeVarConstrained Int TypeSet -- numeric literals, constrained to a set of numeric types
-  | TypeVarIndexable Int TypeExpr TypeExpr -- type must support indexing `[x]` operator: (key type, value type)
+  = TVar   !SourcePos !Int
+  | TShape !ConcreteShape
+  deriving (Show)
+
+instance Eq TypeExpr where
+  TVar _ n1  == TVar _ n2  = n1 == n2
+  TShape c1  == TShape c2  = c1 == c2
+  _          == _          = False
+
+-- | Position where a TVar was minted. Only defined for TVar; callers that
+-- need a fallback for TShape should supply their own.
+tvarPos :: TypeExpr -> Maybe SourcePos
+tvarPos (TVar p _) = Just p
+tvarPos (TShape _) = Nothing
+
+pattern UnitTypeExpr :: TypeExpr
+pattern UnitTypeExpr = TShape (CNamed (Ident "()"))
+
+-- | The opaque-any sentinel: fog's escape hatch for types it can't
+-- express (Go builtins, qualified imports, tuple destructuring, etc.).
+-- Unifies freely; defaults for unconstrained variables resolve to this.
+pattern OpaqueTypeExpr :: TypeExpr
+pattern OpaqueTypeExpr = TShape (CNamed (Ident "opaque"))
+
+-- | Is a concrete shape unit-like (() or struct{})?
+isUnitLikeShape :: ConcreteShape -> Bool
+isUnitLikeShape (CNamed (Ident "()"))       = True
+isUnitLikeShape (CNamed (Ident "struct{}")) = True
+isUnitLikeShape _                           = False
+
+-- | Wildcard shapes unify freely in inference (`opaque`, `any`).
+isWildcardShape :: ConcreteShape -> Bool
+isWildcardShape (CNamed (Ident "opaque")) = True
+isWildcardShape (CNamed (Ident "any"))    = True
+isWildcardShape _                         = False
+
+-- | Ground type: codegen's input. No variables, no constraints.
+data GroundType
+  = TyNamed !Ident
+  | TySlice !GroundType
+  | TyMap   !GroundType !GroundType
+  | TyFunc  ![GroundType] !(Maybe GroundType) !GroundType
   deriving (Eq, Show)
 
--- Is a type a unit-like empty type (() or struct{})?
-isUnitLike :: TypeExpr -> Bool
-isUnitLike (TNamed (Ident "()")) = True
-isUnitLike (TNamed (Ident "struct{}")) = True
-isUnitLike _ = False
+pattern UnitType :: GroundType
+pattern UnitType = TyNamed (Ident "()")
 
--- Is a type opaque or any (wildcard types that unify freely)?
-isWildcard :: TypeExpr -> Bool
-isWildcard (TNamed (Ident "opaque")) = True
-isWildcard (TNamed (Ident "any")) = True
-isWildcard _ = False
+-- | Ground-type counterpart to `OpaqueTypeExpr`.
+pattern OpaqueType :: GroundType
+pattern OpaqueType = TyNamed (Ident "opaque")
 
-pattern UnitType :: TypeExpr
-pattern UnitType = TNamed (Ident "()")
+isUnitLike :: GroundType -> Bool
+isUnitLike (TyNamed (Ident "()"))       = True
+isUnitLike (TyNamed (Ident "struct{}")) = True
+isUnitLike _                            = False
 
-data Param
-  = PUnit -- ()
-  | PTyped Ident TypeExpr -- (name : type)
-  | PVariadic Ident TypeExpr -- (name : ...type), must be the final param
-  deriving (Eq, Show)
+isWildcard :: GroundType -> Bool
+isWildcard (TyNamed (Ident "opaque")) = True
+isWildcard (TyNamed (Ident "any"))    = True
+isWildcard _                          = False
 
-paramType :: Param -> TypeExpr
-paramType PUnit = UnitType
-paramType (PTyped _ t) = t
-paramType (PVariadic _ t) = t
+-- | Parameter. Parametric over the type payload: during inference it's
+-- TypeExpr; after resolution it's GroundType.
+data Param t
+  = PUnit
+  | PTyped    !Ident !t
+  | PVariadic !Ident !t
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- The common shape of a let-binding and a lambda.
--- params ([] = value, [...] = function), value/function return type, and rhs.
-data Binding = Binding [Param] TypeExpr Expr
-  deriving (Eq, Show)
+paramType :: Param GroundType -> GroundType
+paramType PUnit            = UnitType
+paramType (PTyped _ t)     = t
+paramType (PVariadic _ t)  = t
 
--- Build the full type for a binding given its params and declared return type.
--- Value bindings (no params) return retTy directly.
--- Otherwise, each param contributes to fixedTys/mVarTy.
--- PUnit contributes UnitType to fixedTys (matching the EUnitLit sentinel at call sites).
-bindingType :: [Param] -> TypeExpr -> TypeExpr
-bindingType [] retTy = retTy
-bindingType ps retTy = TFunc fixedTys mVarTy retTy
-  where
-    fixedTys = [paramType p | p <- ps, not (isVariadic p)]
-    mVarTy = case reverse ps of
-      (PVariadic _ t : _) -> Just t
-      _ -> Nothing
-    isVariadic (PVariadic {}) = True
-    isVariadic _ = False
+-- | Binding: parameters, declared return type, RHS expression.
+data Binding t = Binding ![Param t] !t !(Expr t)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- Annotation carried by every Expr node. The parser populates pos and ty
--- (with TypeVars for unknown types); inference resolves ty; a post-inference
--- pass computes isStmt.
-data ExprAnn = ExprAnn
-  { pos    :: SourcePos,
-    ty     :: TypeExpr,
-    isStmt :: Bool
-  } deriving (Eq, Show)
+-- | Expression annotation.
+data ExprAnn t = ExprAnn
+  { pos    :: !SourcePos,
+    ty     :: !t,
+    isStmt :: !Bool
+  } deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- The kind of implicit coercion applied at a type boundary.
+-- | Implicit-coercion kind applied at a type boundary.
 data Coercion
   = FuncVoidCoerce -- unit<->struct{} mismatch in function return types
   deriving (Eq, Show)
 
--- AST for expressions. Every constructor carries an ExprAnn.
--- The parser fills in placeholder types; inference resolves them.
-data Expr
-  = EVar ExprAnn Ident
-  | EIntLit ExprAnn IntLit
-  | EFloatLit ExprAnn FloatLit
-  | EStrLit ExprAnn StringLit
-  | EUnitLit ExprAnn
-  | ELet ExprAnn Ident Binding (Maybe Expr) -- name, binding, optional continuation
-  | ELambda ExprAnn Binding -- TFunc of the lambda
-  | EIf ExprAnn Expr Expr Expr
-  | EInfixOp ExprAnn Expr T.Text Expr
-  | EApplication ExprAnn Expr [Expr] -- result type of the application
-  | EIndex ExprAnn Expr Expr -- expr[expr] — slice/map indexing
-  | ESliceLit ExprAnn [Expr] -- slice literal
-  | EMapLit ExprAnn -- empty map literal
-  | ESequence ExprAnn [Expr]
-  | EVariadicSpread ExprAnn Expr -- expr... unpacks []T into a variadic slot at a call site
-  | EMatch ExprAnn Expr [MatchArm] -- match expression
-  | ECoerce ExprAnn Coercion Expr -- coerce inner expr to target type (ExprAnn ty)
-  deriving (Eq, Show)
+-- | Expression AST. Parametric over the type payload carried by annotations
+-- and nested Bindings. Parser produces `Expr TypeExpr`; inference resolves
+-- it to `Expr GroundType` before codegen consumes it.
+data Expr t
+  = EVar             !(ExprAnn t) !Ident
+  | EIntLit          !(ExprAnn t) !IntLit
+  | EFloatLit        !(ExprAnn t) !FloatLit
+  | EStrLit          !(ExprAnn t) !StringLit
+  | EUnitLit         !(ExprAnn t)
+  | ELet             !(ExprAnn t) !Ident !(Binding t) !(Maybe (Expr t))
+  | ELambda          !(ExprAnn t) !(Binding t)
+  | EIf              !(ExprAnn t) !(Expr t) !(Expr t) !(Expr t)
+  | EInfixOp         !(ExprAnn t) !(Expr t) !T.Text !(Expr t)
+  | EApplication     !(ExprAnn t) !(Expr t) ![Expr t]
+  | EIndex           !(ExprAnn t) !(Expr t) !(Expr t)
+  | ESliceLit        !(ExprAnn t) ![Expr t]
+  | EMapLit          !(ExprAnn t)
+  | ESequence        !(ExprAnn t) ![Expr t]
+  | EVariadicSpread  !(ExprAnn t) !(Expr t)
+  | EMatch           !(ExprAnn t) !(Expr t) ![MatchArm t]
+  | ECoerce          !(ExprAnn t) !Coercion !(Expr t)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- Extract the ExprAnn from any Expr node.
-exprAnn :: Expr -> ExprAnn
-exprAnn (EVar a _) = a
-exprAnn (EIntLit a _) = a
-exprAnn (EFloatLit a _) = a
-exprAnn (EStrLit a _) = a
-exprAnn (EUnitLit a) = a
-exprAnn (ELet a _ _ _) = a
-exprAnn (ELambda a _) = a
-exprAnn (EIf a _ _ _) = a
-exprAnn (EInfixOp a _ _ _) = a
-exprAnn (EApplication a _ _) = a
-exprAnn (EIndex a _ _) = a
-exprAnn (ESliceLit a _) = a
-exprAnn (EMapLit a) = a
-exprAnn (ESequence a _) = a
-exprAnn (EVariadicSpread a _) = a
-exprAnn (EMatch a _ _) = a
-exprAnn (ECoerce a _ _) = a
-
--- Extract the SourcePos from any Expr node.
-exprPos :: Expr -> SourcePos
-exprPos = pos . exprAnn
-
--- The type of the Expr node itself.
-exprType :: Expr -> TypeExpr
-exprType = ty . exprAnn
-
--- All TypeExprs directly attached to this node: the node's own type plus
--- any types embedded in Binding/Lambda (param types and return type).
--- Does not include types from child Expr nodes.
-exprTypes :: Expr -> [TypeExpr]
-exprTypes (ELambda ExprAnn{ty = t} (Binding params retTy _)) = t : retTy : map paramType params
-exprTypes (ELet ExprAnn{ty = t} _ (Binding params retTy _) _) = t : retTy : map paramType params
-exprTypes (ECoerce ExprAnn{ty = t} _ inner) = t : [exprType inner]
-exprTypes expr = [exprType expr]
-
-data MatchArm = MatchArm SourcePos Pattern Expr
-  deriving (Eq, Show)
+data MatchArm t = MatchArm !SourcePos !Pattern !(Expr t)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
 data Pattern
-  = PtWildcard -- _
-  | PtVar Ident -- variable binding
-  | PtIntLit IntLit -- integer literal
-  | PtStrLit StringLit -- string literal
-  | PtBoolLit Bool -- true, false
-  | PtSliceEmpty -- []
-  | PtCons Pattern Pattern -- x :: rest
-  | PtTuple [Pattern] -- (a, b)
+  = PtWildcard
+  | PtVar      !Ident
+  | PtIntLit   !IntLit
+  | PtStrLit   !StringLit
+  | PtBoolLit  !Bool
+  | PtSliceEmpty
+  | PtCons     !Pattern !Pattern
+  | PtTuple    ![Pattern]
   deriving (Eq, Show)
+
+exprAnn :: Expr t -> ExprAnn t
+exprAnn (EVar a _)            = a
+exprAnn (EIntLit a _)         = a
+exprAnn (EFloatLit a _)       = a
+exprAnn (EStrLit a _)         = a
+exprAnn (EUnitLit a)          = a
+exprAnn (ELet a _ _ _)        = a
+exprAnn (ELambda a _)         = a
+exprAnn (EIf a _ _ _)         = a
+exprAnn (EInfixOp a _ _ _)    = a
+exprAnn (EApplication a _ _)  = a
+exprAnn (EIndex a _ _)        = a
+exprAnn (ESliceLit a _)       = a
+exprAnn (EMapLit a)           = a
+exprAnn (ESequence a _)       = a
+exprAnn (EVariadicSpread a _) = a
+exprAnn (EMatch a _ _)        = a
+exprAnn (ECoerce a _ _)       = a
+
+exprPos :: Expr t -> SourcePos
+exprPos = pos . exprAnn
+
+exprType :: Expr t -> t
+exprType = ty . exprAnn
+
+-- | Build the full ground type for a binding given its params and declared
+-- return type. Value bindings (no params) return retTy directly.
+bindingType :: [Param GroundType] -> GroundType -> GroundType
+bindingType [] retTy = retTy
+bindingType ps retTy = TyFunc fixedTys mVarTy retTy
+  where
+    fixedTys = [paramType p | p <- ps, not (isVariadic p)]
+    mVarTy = case reverse ps of
+      (PVariadic _ t : _) -> Just t
+      _                   -> Nothing
+    isVariadic (PVariadic {}) = True
+    isVariadic _              = False
+
+-- | Like bindingType but on the inference-time TypeExpr representation.
+-- Used by inference to construct the function-type annotation for a binding
+-- before resolution.
+bindingTypeExpr :: [Param TypeExpr] -> TypeExpr -> TypeExpr
+bindingTypeExpr [] retTy = retTy
+bindingTypeExpr ps retTy = TShape (CFunc fixedTys mVarTy retTy)
+  where
+    fixedTys = [paramTypeExpr p | p <- ps, not (isVariadic p)]
+    mVarTy = case reverse ps of
+      (PVariadic _ t : _) -> Just t
+      _                   -> Nothing
+    isVariadic (PVariadic {}) = True
+    isVariadic _              = False
+    paramTypeExpr PUnit           = UnitTypeExpr
+    paramTypeExpr (PTyped _ t)    = t
+    paramTypeExpr (PVariadic _ t) = t
 
 newtype PackageClause = PackageClause Ident
   deriving (Eq, Show)
 
 data ImportAlias
-  = Default -- import qualified by package name (e.g. import "fmt" -> fmt.Println)
-  | Alias Ident -- import with custom qualifier (e.g. import f "fmt" -> f.Println)
-  | Dot -- import without qualifier (dangerous) (e.g. import . "fmt" -> Println)
-  | Blank -- import for side effects only (e.g. import _ "net/http/pprof")
+  = Default
+  | Alias !Ident
+  | Dot
+  | Blank
   deriving (Eq, Show)
 
-data ImportDecl = ImportDecl ImportAlias T.Text
+data ImportDecl = ImportDecl !ImportAlias !T.Text
   deriving (Eq, Show)
 
-data Header = Header PackageClause [ImportDecl]
+data Header = Header !PackageClause ![ImportDecl]
   deriving (Eq, Show)
 
--- TODO proper design for package/module/namespace system, and how that interacts with Go's package system.
--- For now we just generate a single Go file with a single package.
-data FogFile = FogFile Header Expr
-  deriving (Eq, Show)
+-- | Parsed fog file, parametric over the type payload.
+data FogFile t = FogFile !Header !(Expr t)
+  deriving (Eq, Show, Functor, Foldable, Traversable)

@@ -1,7 +1,7 @@
 module Foglang.Test.InferenceSpec (spec) where
 
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
+import Foglang.AST (Binding (..), Expr (..), GroundType (..), Ident (..), TypeExpr, bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
 import Foglang.Parser (ParserState (..), SC(..), runParse, scn)
 import Foglang.Parser.Expr (childBlockExprSequence)
@@ -10,27 +10,25 @@ import Text.Megaparsec (eof)
 
 -- Parse a fog expression string into an Expr plus the final parser state
 -- (whose pNextTypeVarId seeds inference).
-parseExpr :: T.Text -> Either String (Expr, ParserState)
+parseExpr :: T.Text -> Either String (Expr TypeExpr, ParserState)
 parseExpr s = case runParse (childBlockExprSequence <* runSC scn <* eof) "InferenceSpec.hs" s of
   Left err -> Left (show err)
   Right r -> Right r
 
 -- Parse and infer, returning the type of the outermost expression.
-inferType :: T.Text -> Either [InferError] TypeExpr
+inferType :: T.Text -> Either [InferError] GroundType
 inferType s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
   Right (expr, pstate) -> exprType <$> inferAndResolve (expr, pstate)
 
 -- Parse and infer, returning the full result.
-inferResult :: T.Text -> Either [InferError] Expr
+inferResult :: T.Text -> Either [InferError] (Expr GroundType)
 inferResult s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
   Right (expr, pstate) -> inferAndResolve (expr, pstate)
 
 -- Extract the type of the let-bound name's binding (the function/value type).
--- For "let f x = ... \n f 5", the outer expr type is the result of applying f.
--- But we can also look at the Binding inside a let to get the function type.
-inferLetBindingType :: T.Text -> Either [InferError] TypeExpr
+inferLetBindingType :: T.Text -> Either [InferError] GroundType
 inferLetBindingType s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
   Right (expr, pstate) -> do
@@ -73,17 +71,17 @@ isCannotInferType (CannotInferType _) = True
 isCannotInferType _ = False
 
 -- Shorthand for common types
-intT :: TypeExpr
-intT = TNamed (Ident "int")
+intT :: GroundType
+intT = TyNamed (Ident "int")
 
-float64T :: TypeExpr
-float64T = TNamed (Ident "float64")
+float64T :: GroundType
+float64T = TyNamed (Ident "float64")
 
-stringT :: TypeExpr
-stringT = TNamed (Ident "string")
+stringT :: GroundType
+stringT = TyNamed (Ident "string")
 
-boolT :: TypeExpr
-boolT = TNamed (Ident "bool")
+boolT :: GroundType
+boolT = TyNamed (Ident "bool")
 
 spec :: Spec
 spec = describe "Inference" $ do
@@ -108,7 +106,7 @@ spec = describe "Inference" $ do
 
     it "arithmetic function has int -> int type" $ do
       let result = inferLetBindingType "let f x = x + 1\nf 5"
-      result `shouldBe` Right (TFunc [intT] Nothing intT)
+      result `shouldBe` Right (TyFunc [intT] Nothing intT)
 
     it "comparison returns bool" $ do
       let result = inferType "let gt x = x > 0\ngt 5"
@@ -142,24 +140,24 @@ spec = describe "Inference" $ do
 
     it "unannotated indexing never called: int key defaults to slice of opaque" $
       inferLetBindingType "let first xs = xs[0]"
-        `shouldBe` Right (TFunc [TSlice (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+        `shouldBe` Right (TyFunc [TySlice (TyNamed (Ident "opaque"))] Nothing (TyNamed (Ident "opaque")))
 
     it "unannotated indexing never called: string key defaults to map of opaque" $
       inferLetBindingType "let get m = m[\"k\"]"
-        `shouldBe` Right (TFunc [TMap stringT (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+        `shouldBe` Right (TyFunc [TyMap stringT (TyNamed (Ident "opaque"))] Nothing (TyNamed (Ident "opaque")))
 
     it "unannotated indexing never called: float key defaults to map of opaque" $
       inferLetBindingType "let get m = m[3.14]"
-        `shouldBe` Right (TFunc [TMap float64T (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+        `shouldBe` Right (TyFunc [TyMap float64T (TyNamed (Ident "opaque"))] Nothing (TyNamed (Ident "opaque")))
 
     it "string indexing returns byte" $
-      inferType "let s : string = \"hello\"\ns[0]" `shouldBe` Right (TNamed (Ident "byte"))
+      inferType "let s : string = \"hello\"\ns[0]" `shouldBe` Right (TyNamed (Ident "byte"))
 
     it "unannotated indexing resolves to string from call site" $
-      inferType "let charAt s i = s[i]\nlet s : string = \"hi\"\ncharAt s 0" `shouldBe` Right (TNamed (Ident "byte"))
+      inferType "let charAt s i = s[i]\nlet s : string = \"hi\"\ncharAt s 0" `shouldBe` Right (TyNamed (Ident "byte"))
 
     it "slice literal element types unified" $
-      inferType "[1; 2; 3]" `shouldBe` Right (TSlice intT)
+      inferType "[1; 2; 3]" `shouldBe` Right (TySlice intT)
 
     it "recursive function" $ do
       let src = "let fib n =\n  if n < 2\n  then n\n  else fib (n - 1) + fib (n - 2)\nfib 10"
@@ -254,7 +252,7 @@ spec = describe "Inference" $ do
 
   describe "variadic spread" $ do
     it "spread slice into variadic succeeds" $
-      inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs..." `shouldBe` Right (TNamed (Ident "()"))
+      inferType "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs..." `shouldBe` Right (TyNamed (Ident "()"))
 
   describe "occurs check" $ do
     it "self-referential function triggers InfiniteType" $
@@ -295,5 +293,5 @@ spec = describe "Inference" $ do
     -- TODO: once fog has generics or removes blanket TypeVar->opaque defaulting,
     -- this should become a CannotInferType error instead of defaulting to opaque.
     it "unconstrained identity function defaults to opaque" $ do
-      let opaqueT = TNamed (Ident "opaque")
-      inferLetBindingType "let f x = x\nf" `shouldBe` Right (TFunc [opaqueT] Nothing opaqueT)
+      let opaqueT = TyNamed (Ident "opaque")
+      inferLetBindingType "let f x = x\nf" `shouldBe` Right (TyFunc [opaqueT] Nothing opaqueT)

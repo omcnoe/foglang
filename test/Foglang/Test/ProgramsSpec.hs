@@ -10,9 +10,9 @@ import Foglang.Test.Util (shouldParseAndCodegenTo)
 import Test.Hspec (Spec, describe, it)
 import Text.Megaparsec (ParseErrorBundle, eof)
 
-import Foglang.AST (FogFile)
+import Foglang.AST (FogFile, TypeExpr)
 
-runFogParser :: String -> T.Text -> Either (ParseErrorBundle T.Text Void) (FogFile, ParserState)
+runFogParser :: String -> T.Text -> Either (ParseErrorBundle T.Text Void) (FogFile TypeExpr, ParserState)
 runFogParser path src = runParse (fogFile <* eof) path src
 
 fibonacciFogSrc :: T.Text

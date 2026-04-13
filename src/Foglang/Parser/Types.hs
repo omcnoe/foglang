@@ -1,13 +1,13 @@
 module Foglang.Parser.Types (params, typeExpr) where
 
-import Foglang.AST (Ident (..), Param (..), TypeExpr (..), pattern UnitType)
+import Foglang.AST (ConcreteShape (..), Ident (..), Param (..), TypeExpr (..), pattern UnitTypeExpr)
 import Control.Monad.Reader (asks)
 import Foglang.Parser (Parser, continuation, envFoldCol, freshTypeVar, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
-import Text.Megaparsec (many, optional, try, (<|>))
+import Text.Megaparsec (getSourcePos, many, optional, try, (<|>))
 import Text.Megaparsec.Char (string)
 
-param :: Parser Param
+param :: Parser (Param TypeExpr)
 param = unit <|> try typed <|> try parens <|> bare
   where
     unit = PUnit <$ symbol "()"
@@ -29,11 +29,12 @@ param = unit <|> try typed <|> try parens <|> bare
       _ <- continuation foldCol (symbol ")")
       return p
     bare = do
+      p <- getSourcePos
       name <- lexeme ident
-      t <- freshTypeVar
+      t <- freshTypeVar p
       return $ PTyped name t
 
-params :: Parser [Param]
+params :: Parser [Param TypeExpr]
 params = do
   firstParam <- optional param
   restParams <- case firstParam of
@@ -45,9 +46,9 @@ typeExpr :: Parser TypeExpr
 typeExpr =
   try mapTypeExpr
     <|> try sliceTypeExpr
-    <|> try (TNamed (Ident "struct{}") <$ lexeme (string "struct{}"))
-    <|> try (UnitType <$ lexeme (string "()"))
-    <|> try (TNamed <$> lexeme ident)
+    <|> try (TShape (CNamed (Ident "struct{}")) <$ lexeme (string "struct{}"))
+    <|> try (UnitTypeExpr <$ lexeme (string "()"))
+    <|> try (TShape . CNamed <$> lexeme ident)
     <|> funcTypeExpr
 
 mapTypeExpr :: Parser TypeExpr
@@ -58,13 +59,13 @@ mapTypeExpr = do
   foldCol <- asks envFoldCol
   _ <- continuation foldCol (symbol "]")
   valTy <- typeExpr
-  return $ TMap keyTy valTy
+  return $ TShape (CMap keyTy valTy)
 
 sliceTypeExpr :: Parser TypeExpr
 sliceTypeExpr = do
   _ <- symbol "["
   _ <- symbol "]"
-  TSlice <$> typeExpr
+  TShape . CSlice <$> typeExpr
 
 funcTypeExpr :: Parser TypeExpr
 funcTypeExpr = do
@@ -75,7 +76,7 @@ funcTypeExpr = do
       retTy <- typeExpr
       foldCol <- asks envFoldCol
       _ <- continuation foldCol (symbol ")")
-      return $ TFunc [UnitType] Nothing retTy
+      return $ TShape (CFunc [UnitTypeExpr] Nothing retTy)
     Nothing -> do
       fixedTys <- many (try (typeExpr <* optional (symbol "->")))
       mVarTy <- optional (try (symbol "..." *> typeExpr))
@@ -86,4 +87,4 @@ funcTypeExpr = do
           retTy <- typeExpr
           foldCol <- asks envFoldCol
           _ <- continuation foldCol (symbol ")")
-          return $ TFunc fixedTys mVarTy retTy
+          return $ TShape (CFunc fixedTys mVarTy retTy)

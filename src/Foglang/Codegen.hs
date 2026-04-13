@@ -5,7 +5,7 @@ import Data.Text qualified as T
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import System.Process (readProcess)
-import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), GroundType (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr, pattern UnitType, exprAnn, exprType, isWildcard)
 import Foglang.Inference (inferAndResolve, prettyInferError)
 import Foglang.Parser (ParserState (..))
 
@@ -42,7 +42,7 @@ endsWithShadowDigits name =
 -- Bind function parameters into scope (params don't get renamed — they're
 -- always fresh in their Go scope — but we register them so that references
 -- inside the body resolve correctly).
-bindParams :: Scope -> [Param] -> Scope
+bindParams :: Scope -> [Param GroundType] -> Scope
 bindParams scope [] = scope
 bindParams scope [PUnit] = scope
 bindParams scope (PTyped name _ : rest) = bindParams (snd (bindName scope name)) rest
@@ -67,13 +67,13 @@ useVar indent name = ind indent <> "_ = " <> name <> "\n"
 -- Single-line counterpart to genLocalFunc: wraps a pre-rendered expression
 -- as an inline Go func literal. Used for partial application wrappers and
 -- simple (non-sequence) lambda bodies.
-genInlineFunc :: T.Text -> TypeExpr -> T.Text -> T.Text
+genInlineFunc :: T.Text -> GroundType -> T.Text -> T.Text
 genInlineFunc params (UnitType) body = "func(" <> params <> ") { " <> body <> " }"
-genInlineFunc params retTy body = "func(" <> params <> ") " <> typeExprGoText retTy <> " { return " <> body <> " }"
+genInlineFunc params retTy body = "func(" <> params <> ") " <> typeGoText retTy <> " { return " <> body <> " }"
 
 -- Render a let-bound local function as a multi-line func literal,
 -- using the appropriate statement/body generator for the function body.
-genLocalFunc :: Scope -> Int -> T.Text -> TypeExpr -> Expr -> T.Text
+genLocalFunc :: Scope -> Int -> T.Text -> GroundType -> Expr GroundType -> T.Text
 genLocalFunc scope indent params retTy trhs =
   "func("
     <> params
@@ -101,46 +101,43 @@ floatLitText :: FloatLit -> T.Text
 floatLitText (FloatDecimal t) = t
 floatLitText (FloatHex t) = t
 
-typeExprGoText :: TypeExpr -> T.Text
-typeExprGoText (UnitType) = "struct{}"
-typeExprGoText (TNamed (Ident t)) = t
-typeExprGoText (TSlice t) = "[]" <> typeExprGoText t
-typeExprGoText (TMap k v) = "map[" <> typeExprGoText k <> "]" <> typeExprGoText v
-typeExprGoText (TFunc [UnitType] Nothing retTy) =
+typeGoText :: GroundType -> T.Text
+typeGoText (UnitType) = "struct{}"
+typeGoText (TyNamed (Ident t)) = t
+typeGoText (TySlice t) = "[]" <> typeGoText t
+typeGoText (TyMap k v) = "map[" <> typeGoText k <> "]" <> typeGoText v
+typeGoText (TyFunc [UnitType] Nothing retTy) =
   "func()" <> retTypeGoText retTy
-typeExprGoText (TFunc fixedTys mVarTy retTy) =
+typeGoText (TyFunc fixedTys mVarTy retTy) =
   "func("
-    <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeExprGoText vTy]) mVarTy)
+    <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeGoText vTy]) mVarTy)
     <> ")"
     <> retTypeGoText retTy
-typeExprGoText (TypeVar _)              = error "typeExprGoText: TypeVar survived to codegen"
-typeExprGoText (TypeVarConstrained _ _) = error "typeExprGoText: TypeVarConstrained survived to codegen"
-typeExprGoText (TypeVarIndexable {})    = error "typeExprGoText: TypeVarIndexable survived to codegen"
 
 -- Alias for readability in parameter positions.
-paramTypeGoText :: TypeExpr -> T.Text
-paramTypeGoText = typeExprGoText
+paramTypeGoText :: GroundType -> T.Text
+paramTypeGoText = typeGoText
 
 -- Return type annotation for Go: empty for unit, " T" otherwise.
-retTypeGoText :: TypeExpr -> T.Text
+retTypeGoText :: GroundType -> T.Text
 retTypeGoText (UnitType) = ""
-retTypeGoText t = " " <> typeExprGoText t
+retTypeGoText t = " " <> typeGoText t
 
 -- Render a parameter list as Go source.
 -- A sole anonymous PUnit is the zero-param rewrite: produces "" (no params).
 -- In any other param list, each PUnit becomes "_pN struct{}".
-paramListGoText :: [Param] -> T.Text
+paramListGoText :: [Param GroundType] -> T.Text
 paramListGoText [PUnit] = ""
 paramListGoText params = T.intercalate ", " $ zipWith paramText [0 :: Int ..] params
   where
-    paramText _ (PVariadic name t) = identText name <> " ..." <> typeExprGoText t
+    paramText _ (PVariadic name t) = identText name <> " ..." <> typeGoText t
     paramText _ (PTyped name t) = identText name <> " " <> paramTypeGoText t
     paramText i PUnit = "_p" <> T.pack (show i) <> " struct{}"
 
 -- Build synthetic Params with fresh _pN names from bare types.
 -- Used for partial application and coercion wrappers where we need to generate
 -- a Go closure with named parameters from just the type signature.
-syntheticParams :: [TypeExpr] -> Maybe TypeExpr -> [Param]
+syntheticParams :: [GroundType] -> Maybe GroundType -> [Param GroundType]
 syntheticParams fixedTys mVarTy =
   [PTyped (Ident ("_p" <> T.pack (show i))) t | (i, t) <- zip [0 :: Int ..] fixedTys]
     ++ maybe [] (\vTy -> [PVariadic (Ident "_args") vTy]) mVarTy
@@ -149,7 +146,7 @@ syntheticParams fixedTys mVarTy =
 -- Returns (closureParamDecl, callArgNames) where callArgNames are just the
 -- parameter names (with ... for variadics), ready to be joined with any
 -- pre-supplied arguments.
-closureParamsAndCallArgs :: [TypeExpr] -> Maybe TypeExpr -> (T.Text, [T.Text])
+closureParamsAndCallArgs :: [GroundType] -> Maybe GroundType -> (T.Text, [T.Text])
 closureParamsAndCallArgs [UnitType] Nothing = ("", [])
 closureParamsAndCallArgs fixedTys mVarTy = (paramListGoText params, callArgNames params)
   where
@@ -159,7 +156,7 @@ closureParamsAndCallArgs fixedTys mVarTy = (paramListGoText params, callArgNames
     argName (PVariadic name _) = identText name <> "..."
     argName PUnit = error "closureParamsAndCallArgs: unexpected PUnit"
 
-genElsePart :: Scope -> BodyMode -> Int -> Expr -> T.Text
+genElsePart :: Scope -> BodyMode -> Int -> Expr GroundType -> T.Text
 genElsePart scope mode indent (EIf _ cond then' else') =
   " else if "
     <> genExpr scope cond
@@ -174,7 +171,7 @@ genElsePart scope mode indent e =
     <> ind indent
     <> "}"
 
-genIfChain :: Scope -> BodyMode -> Int -> Expr -> Expr -> Expr -> T.Text
+genIfChain :: Scope -> BodyMode -> Int -> Expr GroundType -> Expr GroundType -> Expr GroundType -> T.Text
 genIfChain scope mode indent cond then' else' =
   ind indent
     <> "if "
@@ -189,7 +186,7 @@ genIfChain scope mode indent cond then' else' =
 data BodyMode = Returning | Void
 
 -- Generate a match expression as a statement-level if/else chain.
-genMatchBody :: Scope -> BodyMode -> Int -> Expr -> [MatchArm] -> T.Text
+genMatchBody :: Scope -> BodyMode -> Int -> Expr GroundType -> [MatchArm GroundType] -> T.Text
 genMatchBody _ _ _ _ [] = ""
 genMatchBody scope mode indent tscrut arms =
   let (tupleArity, hasNonTupleArm) =
@@ -265,13 +262,13 @@ genPatternCond scrut (PtTuple pats) =
 
 -- Generate the continuation of a let binding (the in-expression).
 -- Nothing means the let is the last thing in the block.
-genCont :: Scope -> BodyMode -> Int -> Maybe Expr -> T.Text
+genCont :: Scope -> BodyMode -> Int -> Maybe (Expr GroundType) -> T.Text
 genCont _ _ _ Nothing = ""
 genCont scope mode indent (Just tin) = genBody scope mode indent tin
 
 -- Generate a function body. Returning: last expression gets 'return'.
 -- Void: all expressions emitted as statements.
-genBody :: Scope -> BodyMode -> Int -> Expr -> T.Text
+genBody :: Scope -> BodyMode -> Int -> Expr GroundType -> T.Text
 genBody _ Void _ (EUnitLit _) = ""
 genBody scope mode indent (EIf _ cond then' else') = genIfChain scope mode indent cond then' else'
 genBody scope mode indent (EMatch _ tscrut tarms) = genMatchBody scope mode indent tscrut tarms
@@ -330,13 +327,13 @@ genBody scope Returning indent te = ind indent <> "return " <> genExpr scope te 
 --   void + side effects -> func() struct{} { <Void body>; return struct{}{} }()
 --   void + pure         -> struct{}{}
 --   non-void            -> func() T { <Returning body> }()
-genExprIIFE :: Scope -> Expr -> T.Text
+genExprIIFE :: Scope -> Expr GroundType -> T.Text
 genExprIIFE scope e = case exprAnn e of
   ExprAnn{ty = UnitType, isStmt = True} ->
     "func() struct{} {\n" <> genBody scope Void 1 e <> "\treturn struct{}{}\n}()"
   ExprAnn{ty = UnitType} -> "struct{}{}"
   ExprAnn{ty = t} ->
-    "func() " <> typeExprGoText t <> " {\n" <> genBody scope Returning 1 e <> "}()"
+    "func() " <> typeGoText t <> " {\n" <> genBody scope Returning 1 e <> "}()"
 
 -- Map foglang operators to Go operators (triple-char bitwise/shift -> Go equivalents)
 goInfixOp :: T.Text -> T.Text
@@ -347,7 +344,7 @@ goInfixOp "<<<" = "<<"
 goInfixOp ">>>" = ">>"
 goInfixOp op = op
 
-genExpr :: Scope -> Expr -> T.Text
+genExpr :: Scope -> Expr GroundType -> T.Text
 genExpr scope (EVar _ i) = resolveName scope i
 genExpr _ (EIntLit _ lit) = intLitText lit
 genExpr _ (EFloatLit _ lit) = floatLitText lit
@@ -355,11 +352,11 @@ genExpr _ (EStrLit _ (StringLit t)) = "\"" <> t <> "\""
 genExpr _ (EUnitLit _) = "struct{}{}"
 genExpr scope (EVariadicSpread _ te) = genExpr scope te <> "..."
 genExpr scope (EIndex _ te tidx) = genExpr scope te <> "[" <> genExpr scope tidx <> "]"
-genExpr scope (EInfixOp _ e1 "::" e2) = "append(" <> typeExprGoText (exprType e2) <> "{" <> genExpr scope e1 <> "}, " <> genExpr scope e2 <> "...)"
+genExpr scope (EInfixOp _ e1 "::" e2) = "append(" <> typeGoText (exprType e2) <> "{" <> genExpr scope e1 <> "}, " <> genExpr scope e2 <> "...)"
 genExpr scope (EInfixOp _ e1 op e2) = "(" <> genExpr scope e1 <> " " <> goInfixOp op <> " " <> genExpr scope e2 <> ")"
 genExpr scope (EApplication _ tf targs) =
   case exprType tf of
-    TFunc fixedTys mVarTy retTy ->
+    TyFunc fixedTys mVarTy retTy ->
       let nFixed = length fixedTys
           nSupplied = length targs
           isPartial = nSupplied < nFixed || (nSupplied == nFixed && mVarTy /= Nothing)
@@ -390,11 +387,11 @@ genExpr _ (ESequence _ []) = error "genExpr: empty ESequence in codegen"
 genExpr scope e@(ESequence {}) = genExprIIFE scope e
 genExpr scope e@(ELet _ _ _ (Just _)) = genExprIIFE scope e
 genExpr _ (ELet _ _ _ Nothing) = error "genExpr: ELet without continuation should be in statement context"
-genExpr _ (ESliceLit ExprAnn{ty = TSlice (TNamed (Ident "opaque"))} []) = "nil"
-genExpr _ (ESliceLit ExprAnn{ty = t} []) = typeExprGoText t <> "{}"
-genExpr scope (ESliceLit ExprAnn{ty = t} texprs) = typeExprGoText t <> "{" <> T.intercalate ", " (map (genExpr scope) texprs) <> "}"
-genExpr _ (EMapLit ExprAnn{ty = TMap (TNamed (Ident "opaque")) (TNamed (Ident "opaque"))}) = "nil"
-genExpr _ (EMapLit ExprAnn{ty = t}) = typeExprGoText t <> "{}"
+genExpr _ (ESliceLit ExprAnn{ty = TySlice elemTy} []) | isWildcard elemTy = "nil"
+genExpr _ (ESliceLit ExprAnn{ty = t} []) = typeGoText t <> "{}"
+genExpr scope (ESliceLit ExprAnn{ty = t} texprs) = typeGoText t <> "{" <> T.intercalate ", " (map (genExpr scope) texprs) <> "}"
+genExpr _ (EMapLit ExprAnn{ty = TyMap kTy vTy}) | isWildcard kTy && isWildcard vTy = "nil"
+genExpr _ (EMapLit ExprAnn{ty = t}) = typeGoText t <> "{}"
 genExpr scope e@(EMatch {}) = genExprIIFE scope e
 genExpr scope (ELambda _ (Binding params retTy tbody@(ESequence {}))) =
   genLocalFunc scope 0 (paramListGoText params) retTy tbody
@@ -405,8 +402,8 @@ genExpr scope (ELambda _ (Binding params retTy tbody)) =
 genExpr scope (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
   case (targetTy, exprType inner) of
     -- () return -> struct{} return
-    ( TFunc fixedTys mVarTy (TNamed (Ident "struct{}")),
-      TFunc fixedTys' mVarTy' UnitType
+    ( TyFunc fixedTys mVarTy (TyNamed (Ident "struct{}")),
+      TyFunc fixedTys' mVarTy' UnitType
       )
         | fixedTys == fixedTys',
           mVarTy == mVarTy' ->
@@ -414,8 +411,8 @@ genExpr scope (ECoerce ExprAnn{ty = targetTy} FuncVoidCoerce inner) =
                 callArgs = T.intercalate ", " argNames
              in "func(" <> closureParams <> ") struct{} { " <> genExpr scope inner <> "(" <> callArgs <> "); return struct{}{} }"
     -- struct{} return -> () return
-    ( TFunc fixedTys mVarTy UnitType,
-      TFunc fixedTys' mVarTy' (TNamed (Ident "struct{}"))
+    ( TyFunc fixedTys mVarTy UnitType,
+      TyFunc fixedTys' mVarTy' (TyNamed (Ident "struct{}"))
       )
         | fixedTys == fixedTys',
           mVarTy == mVarTy' ->
@@ -437,8 +434,8 @@ genHeader (Header (PackageClause pkg) imports) =
     <> "\n"
     <> T.concat (map genImport imports)
 
-genDecl :: Scope -> Ident -> [Param] -> TypeExpr -> Expr -> T.Text
-genDecl scope name [] valTy tbody = "var " <> identText name <> " " <> typeExprGoText valTy <> " = " <> genExpr scope tbody <> "\n"
+genDecl :: Scope -> Ident -> [Param GroundType] -> GroundType -> Expr GroundType -> T.Text
+genDecl scope name [] valTy tbody = "var " <> identText name <> " " <> typeGoText valTy <> " = " <> genExpr scope tbody <> "\n"
 genDecl scope name params retTy tbody =
   let paramScope = bindParams scope params
   in "func "
@@ -455,7 +452,7 @@ genDecl scope name params retTy tbody =
       UnitType -> genBody bodySc Void
       _ -> genBody bodySc Returning
 
-genPackageLevel :: Scope -> Expr -> (T.Text, Scope)
+genPackageLevel :: Scope -> Expr GroundType -> (T.Text, Scope)
 genPackageLevel scope (ELet _ n (Binding p t trhs) mtin) =
   let (goName, scope') = bindName scope n
       -- Value bindings: RHS uses old scope (before this binding).
@@ -471,7 +468,7 @@ genPackageLevel scope e
   | isStmt (exprAnn e) = ("func init() {\n" <> genBody scope Void 1 e <> "}\n", scope)
   | otherwise = error $ "unsupported top-level expression: " <> show e
 
-genGoFile :: FogFile -> ParserState -> IO T.Text
+genGoFile :: FogFile TypeExpr -> ParserState -> IO T.Text
 genGoFile (FogFile hdr body) pstate = do
   case inferAndResolve (body, pstate) of
     Left errs -> do

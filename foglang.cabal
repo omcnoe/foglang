@@ -39,6 +39,7 @@ library
       Foglang.Parser.Patterns
       Foglang.Parser.StringLit
       Foglang.Parser.Types
+      Foglang.Subst
   other-modules:
       Paths_foglang
   autogen-modules:
@@ -87,6 +88,7 @@ test-suite foglang-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      Foglang.Test.InferencePerfSpec
       Foglang.Test.InferenceSpec
       Foglang.Test.Parser.ExprSpec
       Foglang.Test.Parser.FloatLitSpec

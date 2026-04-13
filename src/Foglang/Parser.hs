@@ -10,8 +10,6 @@ module Foglang.Parser
     scn,
     -- Fresh type vars
     freshTypeVar,
-    freshTypeVarConstrained,
-    freshTypeVarIndexable,
     -- Vocabulary (using envSC from ReaderT)
     keyword,
     operator,
@@ -43,8 +41,8 @@ import Data.Void (Void)
 import Text.Megaparsec (ParseErrorBundle, ParsecT, Pos, choice, getSourcePos, lookAhead, notFollowedBy, optional, runParserT, satisfy, try, unPos, (<|>))
 import Text.Megaparsec.Char (space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
-import Text.Megaparsec.Pos (mkPos, sourceColumn, sourceLine)
-import Foglang.AST (TypeExpr (..), TypeSet)
+import Text.Megaparsec.Pos (SourcePos, mkPos, sourceColumn, sourceLine)
+import Foglang.AST (TypeExpr (..))
 
 -- ----------------------------------------------------------------------------
 -- Core types
@@ -121,14 +119,12 @@ freshTypeVarId = do
   put s { pNextTypeVarId = pNextTypeVarId s + 1 }
   pure (pNextTypeVarId s)
 
-freshTypeVar :: Parser TypeExpr
-freshTypeVar = TypeVar <$> freshTypeVarId
-
-freshTypeVarConstrained :: TypeSet -> Parser TypeExpr
-freshTypeVarConstrained ts = (`TypeVarConstrained` ts) <$> freshTypeVarId
-
-freshTypeVarIndexable :: TypeExpr -> TypeExpr -> Parser TypeExpr
-freshTypeVarIndexable k v = (\i -> TypeVarIndexable i k v) <$> freshTypeVarId
+-- | Mint a fresh TVar annotated with the given SourcePos. Callers should
+-- pass the position of the construct the TVar annotates (literal start,
+-- expression node position, etc.) so that resolve-time errors point at the
+-- right place.
+freshTypeVar :: SourcePos -> Parser TypeExpr
+freshTypeVar p = TVar p <$> freshTypeVarId
 
 -- ----------------------------------------------------------------------------
 -- Vocabulary

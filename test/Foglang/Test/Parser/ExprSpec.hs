@@ -1,7 +1,7 @@
 module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
-import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
+import Foglang.AST (Binding (..), ConcreteShape (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
 import Foglang.Parser (SC(..), evalParse, scn)
 import Foglang.Parser.Expr (childBlockExprSequence)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
@@ -9,12 +9,12 @@ import Text.Megaparsec (eof)
 import Text.Megaparsec.Pos (initialPos)
 
 -- Dummy annotation for test expected values (matches what stripPos normalizes to).
-a :: ExprAnn
-a = ExprAnn { pos = initialPos "", ty = TNamed (Ident "unresolved"), isStmt = False }
+a :: ExprAnn TypeExpr
+a = ExprAnn { pos = initialPos "", ty = TShape (CNamed (Ident "unresolved")), isStmt = False }
 
 -- Strip all source positions and types from an Expr tree to enable structural
 -- comparison without caring about exact positions or placeholder types.
-stripPos :: Expr -> Expr
+stripPos :: Expr TypeExpr -> Expr TypeExpr
 stripPos (EVar _ i) = EVar a i
 stripPos (EIntLit _ lit) = EIntLit a lit
 stripPos (EFloatLit _ lit) = EFloatLit a lit
@@ -46,36 +46,34 @@ stripPos (ECoerce _ c inner) =
 
 -- Normalize TypeExpr: replace TypeVars with the placeholder.
 stripType :: TypeExpr -> TypeExpr
-stripType (TNamed t) = TNamed t
-stripType (TSlice t) = TSlice (stripType t)
-stripType (TMap k v) = TMap (stripType k) (stripType v)
-stripType (TFunc ps mv r) = TFunc (map stripType ps) (fmap stripType mv) (stripType r)
-stripType (TypeVar _) = ty a
-stripType (TypeVarConstrained _ _) = ty a
-stripType (TypeVarIndexable _ _ _) = ty a
+stripType (TShape (CNamed t)) = TShape (CNamed t)
+stripType (TShape (CSlice t)) = TShape (CSlice (stripType t))
+stripType (TShape (CMap k v)) = TShape (CMap (stripType k) (stripType v))
+stripType (TShape (CFunc ps mv r)) = TShape (CFunc (map stripType ps) (fmap stripType mv) (stripType r))
+stripType (TVar _ _) = ty a
 
 -- Normalize params: replace TypeVars in param types with placeholder.
-stripParam :: Param -> Param
+stripParam :: Param TypeExpr -> Param TypeExpr
 stripParam PUnit = PUnit
 stripParam (PTyped n t) = PTyped n (stripType t)
 stripParam (PVariadic n t) = PVariadic n (stripType t)
 
-stripArmPos :: MatchArm -> MatchArm
+stripArmPos :: MatchArm TypeExpr -> MatchArm TypeExpr
 stripArmPos (MatchArm _ pat body) = MatchArm (pos a) pat (stripPos body)
 
 spec :: Spec
 spec = do
   let validELet =
-        [ ("let x : int = 1", ELet a "x" (Binding [] (TNamed "int") (EIntLit a (IntDecimal "1"))) Nothing),
-          ("let x:int=2", ELet a "x" (Binding [] (TNamed "int") (EIntLit a (IntDecimal "2"))) Nothing),
+        [ ("let x : int = 1", ELet a "x" (Binding [] (TShape (CNamed "int")) (EIntLit a (IntDecimal "1"))) Nothing),
+          ("let x:int=2", ELet a "x" (Binding [] (TShape (CNamed "int")) (EIntLit a (IntDecimal "2"))) Nothing),
           ( "let f (x : int) => int = x",
-            ELet a "f" (Binding [PTyped "x" (TNamed "int")] (TNamed "int") (EVar a "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (TShape (CNamed "int"))] (TShape (CNamed "int")) (EVar a "x")) Nothing
           ),
           ( "let f (x : int) -> (y : int) => int = x",
-            ELet a "f" (Binding [PTyped "x" (TNamed "int"), PTyped "y" (TNamed "int")] (TNamed "int") (EVar a "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (TShape (CNamed "int")), PTyped "y" (TShape (CNamed "int"))] (TShape (CNamed "int")) (EVar a "x")) Nothing
           ),
           ( "let f () => unit = x",
-            ELet a "f" (Binding [PUnit] (TNamed "unit") (EVar a "x")) Nothing
+            ELet a "f" (Binding [PUnit] (TShape (CNamed "unit")) (EVar a "x")) Nothing
           ),
           -- Untyped value binding (inferred type)
           ("let x = 1", ELet a "x" (Binding [] (ty a) (EIntLit a (IntDecimal "1"))) Nothing),
@@ -89,11 +87,11 @@ spec = do
           ),
           -- Mixed bare and annotated params
           ( "let f x (y : int) = x",
-            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (TNamed "int")] (ty a) (EVar a "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (TShape (CNamed "int"))] (ty a) (EVar a "x")) Nothing
           ),
           -- Bare params with explicit return type
           ( "let f x y => int = x",
-            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (TNamed "int") (EVar a "x")) Nothing
+            ELet a "f" (Binding [PTyped "x" (ty a), PTyped "y" (ty a)] (TShape (CNamed "int")) (EVar a "x")) Nothing
           )
         ]
 
