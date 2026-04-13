@@ -1,26 +1,25 @@
--- | Performance regression tests for type inference.
---
--- These tests guard against the O(N²) failure mode we had with the
--- map-based substitution on deeply-nested indexable chains. Under the
--- union-find refactor, each such chain runs in near-linear time.
---
--- The inputs here are pathological by construction (no real fog program
--- would look like this). They're stress tests for the inference +
--- resolution pipeline, not integration tests for user-facing behaviour.
+-- | Regression tests against the O(N^2) pathology the union-find inference
+-- refactor is designed to eliminate. Pre-refactor, N=256 emitted ~97k errors
+-- in ~6s; N=1024 did not complete within 30s. Post-refactor, both complete
+-- in under a second with exactly one error.
 module Foglang.Test.InferencePerfSpec (spec) where
 
+import Control.Exception (evaluate)
 import Data.Text qualified as T
-import Foglang.Inference (InferError (..), inferAndResolve)
-import Foglang.Parser (SC(..), runParse, scn)
-import Foglang.Parser.Expr (childBlockExprSequence)
 import System.Timeout (timeout)
 import Test.Hspec (Spec, describe, it, shouldBe, expectationFailure)
 import Text.Megaparsec (eof)
+import Foglang.Inference (InferError (..), inferAndResolve)
+import Foglang.Parser (SC(..), runParse, scn)
+import Foglang.Parser.Expr (childBlockExprSequence)
 
--- | Build a source string of the form
---   `let f a1 a2 ... aN = a1[0] + a2[a1] + a3[a2] + ... + aN[a(N-1)]`
--- Each `ai` ends up with an indexable type whose key constraint is
--- `a(i-1)`'s type — an N-deep dependency chain through the substitution.
+-- | Build `let f a1 ... aN = a1[0] + a2[a1] + ... + aN[a(N-1)]`.
+--
+-- The `+` chain is load-bearing. It forces every value type to unify
+-- numerically, which pins each `a_i`'s type to `TSlice int`, which then
+-- appears as the KEY of `a_(i+1)`. Inference must build the full N-deep
+-- Link chain in the substitution before any of it can resolve; pre-refactor,
+-- each applySubst chases the whole chain, giving O(N^2) overall.
 pathologicalIndexableChain :: Int -> T.Text
 pathologicalIndexableChain n =
   T.concat
@@ -30,51 +29,44 @@ pathologicalIndexableChain n =
     , T.concat [" + a" <> T.pack (show i) <> "[a" <> T.pack (show (i-1)) <> "]" | i <- [2..n]]
     ]
 
--- | Run inference on a source string with a wall-clock budget. Returns
--- `Nothing` on timeout, otherwise the inference result.
-inferWithin :: Int -> T.Text -> IO (Maybe (Either [InferError] ()))
-inferWithin microseconds src =
-  timeout microseconds $ do
+-- | Run inference with a wall-clock budget in milliseconds. `Nothing` on timeout.
+--
+-- `evaluate` forces WHNF of the Either inside the timeout; without it the
+-- result would be a lazy thunk that timeout can return immediately, and the
+-- actual inference work would happen later outside the timeout.
+inferWithinMs :: Int -> T.Text -> IO (Maybe (Either [InferError] ()))
+inferWithinMs millis src =
+  timeout (millis * 1000) $
     case runParse (childBlockExprSequence <* runSC scn <* eof) "perf-test" src of
       Left err -> error ("parse failed: " <> show err)
       Right (expr, pstate) ->
-        -- Discard the resolved Expr — we only care about the Either shape
-        -- and the number of errors, not the tree contents.
-        let result = inferAndResolve (expr, pstate)
-        in pure $ case result of
-             Left errs -> Left errs
-             Right _   -> Right ()
+        -- Discard the resolved tree; only the Either shape and error
+        -- count matter here.
+        evaluate $ case inferAndResolve (expr, pstate) of
+          Left errs -> Left errs
+          Right _   -> Right ()
 
 spec :: Spec
 spec = describe "inference performance" $ do
-  describe "pathological indexable chain" $ do
-    -- N=256 under union-find completes in well under a second on any
-    -- reasonable machine. Quadratic behaviour would take minutes.
+  describe "pathological indexable addition chain" $ do
+    -- N=256; post-refactor: sub-second; pre-refactor: ~6s with ~97k errors.
     it "256-level chain completes within budget" $ do
-      mResult <- inferWithin (5 * 1000 * 1000) (pathologicalIndexableChain 256)
+      mResult <- inferWithinMs 5000 (pathologicalIndexableChain 256)
       case mResult of
-        Nothing -> expectationFailure "inference exceeded 5-second budget"
+        Nothing -> expectationFailure "inference exceeded 5000ms budget"
         Just _  -> pure ()
 
-    -- N=1024 is ~4x larger input and would be ~16x slower under O(N²).
-    -- Linear (or near-linear) behaviour keeps the wall-clock manageable.
+    -- N=1024; post-refactor: sub-second; Pre-refactor: >30s (timeout).
     it "1024-level chain completes within budget" $ do
-      mResult <- inferWithin (10 * 1000 * 1000) (pathologicalIndexableChain 1024)
+      mResult <- inferWithinMs 10000 (pathologicalIndexableChain 1024)
       case mResult of
-        Nothing -> expectationFailure "inference exceeded 10-second budget"
+        Nothing -> expectationFailure "inference exceeded 10000ms budget"
         Just _  -> pure ()
 
-    -- Also verify the expected error shape. Under the old implementation
-    -- the N-deep chain emitted O(N²) CannotInferType errors (one per
-    -- surviving TypeVarIndexable nested inside another). Under folded
-    -- resolve the Either monad short-circuits at the first indexable-key
-    -- barrier, so exactly one error is produced — any regression that
-    -- stops short-circuiting (e.g. collecting errors applicatively) or
-    -- reintroduces duplicate reporting shows up as a jump here.
+    -- Folded resolve short-circuits Either on the first CannotInferType.
     it "1024-level chain reports exactly one error" $ do
-      mResult <- inferWithin (10 * 1000 * 1000) (pathologicalIndexableChain 1024)
+      mResult <- inferWithinMs 10000 (pathologicalIndexableChain 1024)
       case mResult of
-        Nothing -> expectationFailure "inference exceeded 10-second budget"
+        Nothing -> expectationFailure "inference exceeded 10000ms budget"
+        Just (Right _) -> expectationFailure "expected CannotInferType errors, got clean resolve"
         Just (Left errs) -> length errs `shouldBe` 1
-        Just (Right _) ->
-          expectationFailure "expected CannotInferType errors, got clean resolve"
