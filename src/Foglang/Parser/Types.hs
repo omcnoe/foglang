@@ -2,7 +2,7 @@ module Foglang.Parser.Types (params, typeExpr) where
 
 import Foglang.AST (Ident (..), Param (..), TypeExpr (..), pattern UnitType)
 import Control.Monad.Reader (asks)
-import Foglang.Parser (Parser, continuation, envFoldCol, freshTVar, keyword, lexeme, symbol)
+import Foglang.Parser (Parser, continuation, envFoldCol, freshTypeVar, keyword, lexeme, symbol)
 import Foglang.Parser.Ident (ident)
 import Text.Megaparsec (many, optional, try, (<|>))
 import Text.Megaparsec.Char (string)
@@ -30,7 +30,7 @@ param = unit <|> try typed <|> try parens <|> bare
       return p
     bare = do
       name <- lexeme ident
-      t <- freshTVar
+      t <- freshTypeVar
       return $ PTyped name t
 
 params :: Parser [Param]

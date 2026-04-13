@@ -2,11 +2,12 @@ module Foglang.Codegen (genGoFile) where
 
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
-import Foglang.Inference (inferAndResolve, prettyInferError)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 import System.Process (readProcess)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), FloatLit (..), FogFile (..), Header (..), Ident (..), ImportAlias (..), ImportDecl (..), IntLit (..), MatchArm (..), PackageClause (..), Param (..), Pattern (..), StringLit (..), TypeExpr (..), pattern UnitType, exprAnn, exprType)
+import Foglang.Inference (inferAndResolve, prettyInferError)
+import Foglang.Parser (ParserState (..))
 
 -- Scope tracks how many times each name has been bound, enabling shadowing
 -- via renaming. First binding emits "x", second emits "x_1", etc.
@@ -112,8 +113,9 @@ typeExprGoText (TFunc fixedTys mVarTy retTy) =
     <> T.intercalate ", " (map paramTypeGoText fixedTys ++ maybe [] (\vTy -> ["..." <> typeExprGoText vTy]) mVarTy)
     <> ")"
     <> retTypeGoText retTy
-typeExprGoText (TVar _) = error "typeExprGoText: TVar survived to codegen"
-typeExprGoText (TConstrained _ _) = error "typeExprGoText: TConstrained survived to codegen"
+typeExprGoText (TypeVar _)              = error "typeExprGoText: TypeVar survived to codegen"
+typeExprGoText (TypeVarConstrained _ _) = error "typeExprGoText: TypeVarConstrained survived to codegen"
+typeExprGoText (TypeVarIndexable {})    = error "typeExprGoText: TypeVarIndexable survived to codegen"
 
 -- Alias for readability in parameter positions.
 paramTypeGoText :: TypeExpr -> T.Text
@@ -469,14 +471,15 @@ genPackageLevel scope e
   | isStmt (exprAnn e) = ("func init() {\n" <> genBody scope Void 1 e <> "}\n", scope)
   | otherwise = error $ "unsupported top-level expression: " <> show e
 
-genGoFile :: FogFile -> IO T.Text
-genGoFile (FogFile hdr body) = do
-  case inferAndResolve body of
+genGoFile :: FogFile -> ParserState -> IO T.Text
+genGoFile (FogFile hdr body) pstate = do
+  case inferAndResolve (body, pstate) of
     Left errs -> do
       mapM_ (hPutStrLn stderr) (map prettyInferError errs)
       exitFailure
     Right tbody -> do
       let (bodyText, _) = genPackageLevel emptyScope tbody
-          raw = genHeader hdr <> bodyText
-      formatted <- readProcess "gofmt" [] (T.unpack raw)
+          headerText = genHeader hdr
+          rawText = headerText <> bodyText
+      formatted <- readProcess "gofmt" [] (T.unpack rawText)
       return $ T.pack formatted

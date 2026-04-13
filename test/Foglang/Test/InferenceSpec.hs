@@ -3,28 +3,29 @@ module Foglang.Test.InferenceSpec (spec) where
 import Data.Text qualified as T
 import Foglang.AST (Binding (..), Expr (..), Ident (..), TypeExpr (..), bindingType, exprType)
 import Foglang.Inference (InferError (..), inferAndResolve)
-import Foglang.Parser (SC(..), runParse, scn)
+import Foglang.Parser (ParserState (..), SC(..), runParse, scn)
 import Foglang.Parser.Expr (childBlockExprSequence)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
 
--- Parse a fog expression string into an Expr.
-parseExpr :: T.Text -> Either String Expr
-parseExpr s = case runParse (childBlockExprSequence <* runSC scn <* eof) "test" s of
+-- Parse a fog expression string into an Expr plus the final parser state
+-- (whose pNextTypeVarId seeds inference).
+parseExpr :: T.Text -> Either String (Expr, ParserState)
+parseExpr s = case runParse (childBlockExprSequence <* runSC scn <* eof) "InferenceSpec.hs" s of
   Left err -> Left (show err)
-  Right expr -> Right expr
+  Right r -> Right r
 
 -- Parse and infer, returning the type of the outermost expression.
 inferType :: T.Text -> Either [InferError] TypeExpr
 inferType s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
-  Right expr -> exprType <$> inferAndResolve expr
+  Right (expr, pstate) -> exprType <$> inferAndResolve (expr, pstate)
 
 -- Parse and infer, returning the full result.
 inferResult :: T.Text -> Either [InferError] Expr
 inferResult s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
-  Right expr -> inferAndResolve expr
+  Right (expr, pstate) -> inferAndResolve (expr, pstate)
 
 -- Extract the type of the let-bound name's binding (the function/value type).
 -- For "let f x = ... \n f 5", the outer expr type is the result of applying f.
@@ -32,8 +33,8 @@ inferResult s = case parseExpr s of
 inferLetBindingType :: T.Text -> Either [InferError] TypeExpr
 inferLetBindingType s = case parseExpr s of
   Left err -> error ("parse failed: " ++ err)
-  Right expr -> do
-    resolved <- inferAndResolve expr
+  Right (expr, pstate) -> do
+    resolved <- inferAndResolve (expr, pstate)
     case resolved of
       ELet _ _ (Binding params retTy _) _ -> Right (bindingType params retTy)
       _ -> error "expected ELet"
@@ -54,6 +55,10 @@ isNamedPUnit _ = False
 isNotAFunction :: InferError -> Bool
 isNotAFunction (NotAFunction _ _) = True
 isNotAFunction _ = False
+
+isNotAnIndexable :: InferError -> Bool
+isNotAnIndexable (NotAnIndexable _ _) = True
+isNotAnIndexable _ = False
 
 isMissingSpread :: InferError -> Bool
 isMissingSpread (MissingSpread _ _) = True
@@ -124,6 +129,34 @@ spec = describe "Inference" $ do
 
     it "slice indexing" $
       inferType "let first (xs : []int) = xs[0]\nfirst [1; 2; 3]" `shouldBe` Right intT
+
+    it "unannotated indexing resolves to slice from call site" $
+      inferType "let first xs = xs[0]\nfirst [10; 20; 30]" `shouldBe` Right intT
+
+    it "unannotated indexing resolves to map from call site" $ do
+      let src = "let lookup m = m[\"key\"]\nlet mm : map[string]int = {}\nlookup mm"
+      inferType src `shouldBe` Right intT
+
+    it "unannotated chained indexing resolves through multiple layers" $
+      inferType "let ff xss = xss[0][0]\nff [[1; 2]; [3; 4]]" `shouldBe` Right intT
+
+    it "unannotated indexing never called: int key defaults to slice of opaque" $
+      inferLetBindingType "let first xs = xs[0]"
+        `shouldBe` Right (TFunc [TSlice (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+
+    it "unannotated indexing never called: string key defaults to map of opaque" $
+      inferLetBindingType "let get m = m[\"k\"]"
+        `shouldBe` Right (TFunc [TMap stringT (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+
+    it "unannotated indexing never called: float key defaults to map of opaque" $
+      inferLetBindingType "let get m = m[3.14]"
+        `shouldBe` Right (TFunc [TMap float64T (TNamed (Ident "opaque"))] Nothing (TNamed (Ident "opaque")))
+
+    it "string indexing returns byte" $
+      inferType "let s : string = \"hello\"\ns[0]" `shouldBe` Right (TNamed (Ident "byte"))
+
+    it "unannotated indexing resolves to string from call site" $
+      inferType "let charAt s i = s[i]\nlet s : string = \"hi\"\ncharAt s 0" `shouldBe` Right (TNamed (Ident "byte"))
 
     it "slice literal element types unified" $
       inferType "[1; 2; 3]" `shouldBe` Right (TSlice intT)
@@ -201,6 +234,18 @@ spec = describe "Inference" $ do
           Left errs -> any isNotAFunction errs
           Right _ -> False
 
+    it "indexing an int literal is not indexable" $
+      inferResult "42[0]" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isNotAnIndexable errs
+          Right _ -> False
+
+    it "indexing unit is not indexable" $
+      inferResult "()[0]" `shouldSatisfy` \r ->
+        case r of
+          Left errs -> any isNotAnIndexable errs
+          Right _ -> False
+
     it "missing spread: bare slice passed to variadic without ..." $
       inferResult "let f (args : ...int) => () = ()\nlet xs : []int = [1; 2; 3]\nf xs" `shouldSatisfy` \r ->
         case r of
@@ -247,7 +292,7 @@ spec = describe "Inference" $ do
           Right _ -> False
 
   describe "unconstrained function param" $ do
-    -- TODO: once fog has generics or removes blanket TVar->opaque defaulting,
+    -- TODO: once fog has generics or removes blanket TypeVar->opaque defaulting,
     -- this should become a CannotInferType error instead of defaulting to opaque.
     it "unconstrained identity function defaults to opaque" $ do
       let opaqueT = TNamed (Ident "opaque")

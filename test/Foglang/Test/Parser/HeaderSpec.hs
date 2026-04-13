@@ -2,14 +2,14 @@ module Foglang.Test.Parser.HeaderSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Header (..), ImportAlias (..), ImportDecl (..), PackageClause (..))
-import Foglang.Parser (runParse)
+import Foglang.Parser (evalParse)
 import Foglang.Parser.Header (header)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
 
 spec :: Spec
 spec = do
-  let parseHeader s = runParse (header <* eof) "HeaderSpec.hs" s
+  let parseHeader s = evalParse (header <* eof) "HeaderSpec.hs" s
 
   describe "header parses" $ do
     it "single imports, grouped imports, all alias kinds, and empty groups" $

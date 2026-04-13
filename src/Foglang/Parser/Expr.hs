@@ -38,7 +38,7 @@ exprSequence = do
   case (e : es) of
     [x] -> return x
     xs -> do
-      t <- freshTVar
+      t <- freshTypeVar
       return $ ESequence ExprAnn {pos = p, ty = t, isStmt = False} xs
 
 -- | A folded expression: enter a fold context, parse an expression.
@@ -70,7 +70,7 @@ letExpr itemLi = do
       mSep <- optional (try sep)
       case mSep of
         Just _ -> typeExpr
-        Nothing -> freshTVar
+        Nothing -> freshTypeVar
     _ <- symbol "="
 
     rhs <- childBlockExprSequence
@@ -80,7 +80,7 @@ letExpr itemLi = do
   -- Outside the fold so envFoldCol is the enclosing context's, not the let's.
   mtin <- optional $ try $ continuation itemLi exprSequence
 
-  t <- freshTVar
+  t <- freshTypeVar
   return $ ELet ExprAnn {pos = p, ty = t, isStmt = True} name (Binding ps typeAnno rhs) mtin
 
 -- ----------------------------------------------------------------------------
@@ -142,7 +142,7 @@ expr = makeExprParser term termOpTable
       idxs <- some $ do
         p <- getSourcePos
         _ <- string "["
-        t <- freshTVar
+        t <- freshTypeVar
         runEnvSC
         idx <- expr
         foldCol <- asks envFoldCol
@@ -158,19 +158,19 @@ expr = makeExprParser term termOpTable
     spreadOp = Postfix $ try $ do
       runEnvSC
       _ <- string "..."
-      t <- freshTVar
+      t <- freshTypeVar
       return $ \base -> EVariadicSpread ExprAnn {pos = exprPos base, ty = t, isStmt = False} base
 
     -- Parse an infix operator with boundary check.
     infixOp :: T.Text -> Parser (Expr -> Expr -> Expr)
     infixOp op = do
       _ <- operator op
-      t <- freshTVar
+      t <- freshTypeVar
       return (\e1 e2 -> EInfixOp ExprAnn {pos = exprPos e1, ty = t, isStmt = False} e1 op e2)
 
-    floatLitExpr  = do p <- getSourcePos; lit <- floatLit;  t <- freshTConstrained tsFloat;      pure $ EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} lit
-    intLitExpr    = do p <- getSourcePos; lit <- intLit;    t <- freshTConstrained tsInt;        pure $ EIntLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
-    stringLitExpr = do p <- getSourcePos; lit <- stringLit; t <- pure $ TNamed $ Ident "string"; pure $ EStrLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
+    floatLitExpr  = do p <- getSourcePos; lit <- floatLit;  t <- freshTypeVarConstrained tsFloat; pure $ EFloatLit ExprAnn {pos = p, ty = t, isStmt = False} lit
+    intLitExpr    = do p <- getSourcePos; lit <- intLit;    t <- freshTypeVarConstrained tsInt;   pure $ EIntLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
+    stringLitExpr = do p <- getSourcePos; lit <- stringLit; t <- pure $ TNamed $ Ident "string";  pure $ EStrLit   ExprAnn {pos = p, ty = t, isStmt = False} lit
 
     -- Slice literal: items are folded expressions (no let absorption),
     -- separated by `;` or newlines. Delimited by [ ].
@@ -194,11 +194,11 @@ expr = makeExprParser term termOpTable
             return (first : rest)
       foldCol <- asks envFoldCol
       _ <- continuation foldCol (string "]")
-      t <- freshTVar
+      t <- freshTypeVar
       return $ ESliceLit ExprAnn {pos = p, ty = t, isStmt = False} items
 
-    mapLitExpr  = do p <- getSourcePos; _  <- string "{}"; t <- freshTVar;     pure $ EMapLit  ExprAnn {pos = p, ty = t, isStmt = False}
-    varExpr     = do p <- getSourcePos; qi <- qualIdent;   t <- freshTVar;     pure $ EVar     ExprAnn {pos = p, ty = t, isStmt = False} qi
+    mapLitExpr  = do p <- getSourcePos; _  <- string "{}"; t <- freshTypeVar;  pure $ EMapLit  ExprAnn {pos = p, ty = t, isStmt = False}
+    varExpr     = do p <- getSourcePos; qi <- qualIdent;   t <- freshTypeVar;  pure $ EVar     ExprAnn {pos = p, ty = t, isStmt = False} qi
     unitLitExpr = do p <- getSourcePos; _  <- string "()"; t <- pure UnitType; pure $ EUnitLit ExprAnn {pos = p, ty = t, isStmt = False}
 
     -- Parens: delimited by ( ), semicolons are valid separators inside.
@@ -226,10 +226,10 @@ expr = makeExprParser term termOpTable
         mArrow <- optional (try (symbol "=>"))
         typeAnno <- case mArrow of
           Just _ -> typeExpr
-          Nothing -> freshTVar
+          Nothing -> freshTypeVar
         _ <- symbol "="
         body <- childBlockExprSequence
-        t <- freshTVar
+        t <- freshTypeVar
         return $ ELambda ExprAnn {pos = p, ty = t, isStmt = False} (Binding ps typeAnno body)
 
     -- match: resolve own fold for header, continuation for arms.
@@ -245,7 +245,7 @@ expr = makeExprParser term termOpTable
       arms <- continuation matchCol $ do
         _ <- keyword "with"
         matchArms
-      t <- freshTVar
+      t <- freshTypeVar
       return $ EMatch ExprAnn {pos = p, ty = t, isStmt = False} scrut arms
       where
         -- Match arms: one or more, strictly indented past the match keyword.
@@ -288,7 +288,7 @@ expr = makeExprParser term termOpTable
       mElseBranch <- optional $ try $ continuation ifCol $ do
         branchLine <- sourceLine <$> getSourcePos
         fold ifCol branchLine (keyword "else" *> childBlockExprSequence)
-      t <- freshTVar
+      t <- freshTypeVar
       let elseBranch = case mElseBranch of
             Just e  -> e
             -- empty else branch defaults to () value
@@ -298,5 +298,5 @@ expr = makeExprParser term termOpTable
     applicationExpr :: Operator Parser Expr
     applicationExpr = Postfix $ do
       args <- some term
-      t <- freshTVar
+      t <- freshTypeVar
       return (\f -> EApplication ExprAnn {pos = exprPos f, ty = t, isStmt = True} f args)

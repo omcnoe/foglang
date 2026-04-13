@@ -4,45 +4,54 @@ import Control.Monad.State.Strict (StateT, get, gets, put, modify, runStateT, li
 import Data.Bifunctor (first)
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
-import Data.Semigroup (Max (..))
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes, tsInt, isWildcard, isUnitLike)
 import Text.Megaparsec.Pos (SourcePos, sourcePosPretty)
+import Foglang.AST (Binding (..), Coercion (..), Expr (..), ExprAnn (..), Ident (..), MatchArm (..), Param (..), Pattern (..), TypeExpr (..), TypeSet (..), pattern UnitType, bindingType, exprAnn, exprPos, exprType, exprTypes, tsInt, isWildcard, isUnitLike)
+import Foglang.Parser (ParserState (..))
 
 -- Environment maps names to their types.
 type Env = Map.Map Ident TypeExpr
 
--- Substitution: maps TVar IDs to their resolved types
+-- Substitution: maps TypeVar IDs to their resolved types
 type Subst = Map.Map Int TypeExpr
+-- TODO: model of Subst is fundamentally flawed and imposes unworkable scaling limitations on inference.
+-- Subst = Map Int TypeExpr where TypeExpr can itself contain TypeVars means every entry is potentially
+-- a pointer into other entries, and the map as a whole forms a directed graph. Chasing that
+-- graph causes quadratic cost for pathological (and not so pathological) inputs.
+-- Need to refactor design to cleanly separate "link/pointer (type variables)" substitutions from "root/concrete (actual type)" substitutions in the subst map.
 
 data InferError
   = UnknownVariable SourcePos Ident
   | TypeMismatch SourcePos TypeExpr TypeExpr -- expected, actual
-  | InfiniteType SourcePos Int TypeExpr -- TVar appears inside the type it's being unified with (not recursive function, but "structurally infinite" type)
+  | InfiniteType SourcePos Int TypeExpr -- TypeVar appears inside the type it's being unified with (not recursive function, but "structurally infinite" type)
   | NotAFunction SourcePos TypeExpr
+  | NotAnIndexable SourcePos TypeExpr -- tried to index a non-indexable concrete type
   | CannotInferType SourcePos
   | NamedPUnit SourcePos Ident
-  | InvalidSpread SourcePos TypeExpr
   | MissingSpread SourcePos TypeExpr -- bare slice passed to variadic without ...
   deriving (Eq, Show)
 
--- Inference state: substitution + fresh TVar counter
-data InferState = InferState { inferSubst :: !Subst, inferNextTVar :: !Int }
+-- Inference state: substitution + fresh TypeVar counter
+data InferState = InferState { inferSubst :: !Subst, iNextTypeVarId :: !Int }
 
-type Infer a = StateT InferState (Either InferError) a
+-- StateT to allow short circuit on first inference error via Either
+type Infer = StateT InferState (Either InferError)
 
-freshTVar :: Infer TypeExpr
-freshTVar = do
-  st <- get
-  put st { inferNextTVar = inferNextTVar st + 1 }
-  return (TVar (inferNextTVar st))
+freshTypeVarId :: Infer Int
+freshTypeVarId = do
+  s <- get
+  put s { iNextTypeVarId = iNextTypeVarId s + 1 }
+  pure (iNextTypeVarId s)
 
-freshConstrained :: TypeSet -> Infer TypeExpr
-freshConstrained ts = do
-  st <- get
-  put st { inferNextTVar = inferNextTVar st + 1 }
-  return (TConstrained (inferNextTVar st) ts)
+freshTypeVar :: Infer TypeExpr
+freshTypeVar = TypeVar <$> freshTypeVarId
+
+freshTypeVarConstrained :: TypeSet -> Infer TypeExpr
+freshTypeVarConstrained ts = (`TypeVarConstrained` ts) <$> freshTypeVarId
+
+freshTypeVarIndexable :: TypeExpr -> TypeExpr -> Infer TypeExpr
+freshTypeVarIndexable k v = (\i -> TypeVarIndexable i k v) <$> freshTypeVarId
 
 getSubst :: Infer Subst
 getSubst = gets inferSubst
@@ -64,21 +73,25 @@ applySubstM t = do
   s <- getSubst
   return (applySubst s t)
 
--- Apply substitution to a type, chasing TVar chains.
+-- Apply substitution map to a type expression, chasing TypeVar chains.
 applySubst :: Subst -> TypeExpr -> TypeExpr
-applySubst s (TVar n) =
-  case Map.lookup n s of
-    Just t -> applySubst s t -- chase chains
-    Nothing -> TVar n
+applySubst _ (TNamed t) = (TNamed t)
 applySubst s (TSlice t) = TSlice (applySubst s t)
 applySubst s (TMap k v) = TMap (applySubst s k) (applySubst s v)
-applySubst s (TFunc params mVar ret) =
-  TFunc (map (applySubst s) params) (fmap (applySubst s) mVar) (applySubst s ret)
-applySubst s (TConstrained n ts) =
+applySubst s (TFunc params mVar ret) = TFunc (map (applySubst s) params) (fmap (applySubst s) mVar) (applySubst s ret)
+-- chase chains:
+applySubst s (TypeVar n) =
   case Map.lookup n s of
     Just t -> applySubst s t
-    Nothing -> TConstrained n ts
-applySubst _ t = t -- TNamed
+    Nothing -> TypeVar n
+applySubst s (TypeVarConstrained n ts) =
+  case Map.lookup n s of
+    Just t -> applySubst s t
+    Nothing -> TypeVarConstrained n ts
+applySubst s (TypeVarIndexable n k v) =
+  case Map.lookup n s of
+    Just t -> applySubst s t
+    Nothing -> TypeVarIndexable n (applySubst s k) (applySubst s v)
 
 -- Built-in names that are always in scope.
 -- TODO better approach for this
@@ -95,6 +108,7 @@ preludeEnv =
       (Ident "mapInsert", TNamed (Ident "opaque")),
       (Ident "mapDelete", TNamed (Ident "opaque")),
       (Ident "intRange", TNamed (Ident "opaque"))
+      -- TODO need to eventually remove ALL usages of "opaque"
     ]
 
 -- Unify two types, returning updated substitution or error.
@@ -106,27 +120,32 @@ unify p s rawT1 rawT2 =
       t1 = applySubst s rawT1
       t2 = applySubst s rawT2
 
-      -- Check if a TVar ID occurs in a type expression.
+      -- Check if a TypeVar ID occurs inside it's own definition - illegal infinite type.
       -- The type expression should already have substitution applied by the caller (unify').
       isInfiniteType :: Int -> TypeExpr -> Bool
-      isInfiniteType n (TVar m) = n == m
-      isInfiniteType n (TConstrained m _) = n == m
+      isInfiniteType _ (TNamed _) = False
       isInfiniteType n (TSlice t) = isInfiniteType n t
       isInfiniteType n (TMap k v) = isInfiniteType n k || isInfiniteType n v
       isInfiniteType n (TFunc ps mVar ret) =
         any (isInfiniteType n) ps || maybe False (isInfiniteType n) mVar || isInfiniteType n ret
-      isInfiniteType _ (TNamed _) = False
+      isInfiniteType n (TypeVar m) = n == m
+      isInfiniteType n (TypeVarConstrained m _) = n == m
+      isInfiniteType n (TypeVarIndexable m k v) = n == m || isInfiniteType n k || isInfiniteType n v
 
-      bindTVar n t
-        | TVar n == t  = Right s
+      bindTypeVar n t
+        | TypeVar n == t  = Right s
         | isInfiniteType n t = Left (InfiniteType p n t)
         | otherwise    = Right (Map.insert n t s)
-      resolveConstrained n ts t
+      resolveTypeVarConstrained n ts t
         | t `Set.member` tsMembers ts = Right (Map.insert n (TNamed t) s)
         | otherwise = mismatch
-      bindConstrained n ts m
+      bindTypeVarConstrained n ts m
         | n == m    = Right s
-        | otherwise = Right (Map.insert m (TConstrained n ts) s)
+        | otherwise = Right (Map.insert m (TypeVarConstrained n ts) s)
+      bindTypeVarIndexable n kTy vTy m
+        | n == m    = Right s
+        | isInfiniteType m (TypeVarIndexable n kTy vTy) = Left (InfiniteType p m (TypeVarIndexable n kTy vTy))
+        | otherwise = Right (Map.insert m (TypeVarIndexable n kTy vTy) s)
       unifyPairwise sub [] [] = Right sub
       unifyPairwise sub (a : as') (b : bs') = do
         sub' <- unify p sub a b
@@ -137,20 +156,65 @@ unify p s rawT1 rawT2 =
     _ | isWildcard t1 || isWildcard t2 -> Right s
     -- Unit-like types unify freely with other unit-like
     _ | isUnitLike t1 && isUnitLike t2 -> Right s
-    -- TConstrained ~ TConstrained: must be the same type set
-    (TConstrained n ts1, TConstrained m ts2)
+    -- TypeVarConstrained ~ TypeVarConstrained: must be the same type set
+    (TypeVarConstrained n ts1, TypeVarConstrained m ts2)
       | n == m    -> Right s
-      | ts1 == ts2 -> Right (Map.insert m (TConstrained n ts1) s)
+      | ts1 == ts2 -> Right (Map.insert m (TypeVarConstrained n ts1) s)
       | otherwise -> mismatch
-    -- TConstrained ~ TNamed: check membership
-    (TConstrained n ts, TNamed t) -> resolveConstrained n ts t
-    (TNamed t, TConstrained n ts) -> resolveConstrained n ts t
-    -- TConstrained ~ TVar: propagate the constraint
-    (TConstrained n ts, TVar m) -> bindConstrained n ts m
-    (TVar m, TConstrained n ts) -> bindConstrained n ts m
-    -- TVar: bind to the other type (with occurs check)
-    (TVar n, _) -> bindTVar n t2
-    (_, TVar n) -> bindTVar n t1
+    -- TypeVarConstrained ~ TNamed: check membership
+    (TypeVarConstrained n ts, TNamed t) -> resolveTypeVarConstrained n ts t
+    (TNamed t, TypeVarConstrained n ts) -> resolveTypeVarConstrained n ts t
+    -- TypeVarConstrained ~ TypeVar: propagate the constraint
+    (TypeVarConstrained n ts, TypeVar m) -> bindTypeVarConstrained n ts m
+    (TypeVar m, TypeVarConstrained n ts) -> bindTypeVarConstrained n ts m
+    -- Numeric literals (TypeVarConstrained) are not indexable.
+    (TypeVarConstrained {}, TypeVarIndexable {}) -> Left (NotAnIndexable p t1)
+    (TypeVarIndexable {}, TypeVarConstrained {}) -> Left (NotAnIndexable p t2)
+    -- TypeVarIndexable ~ TypeVarIndexable: merge by unifying keys and values.
+    (TypeVarIndexable n k1 v1, TypeVarIndexable m k2 v2)
+      | n == m    -> Right s
+      | otherwise -> do
+          s' <- unify p s k1 k2
+          s'' <- unify p s' v1 v2
+          Right (Map.insert m (TypeVarIndexable n k1 v1) s'')
+    -- TypeVarIndexable ~ TSlice: key must be int, value must be the slice elem.
+    (TypeVarIndexable n k v, TSlice elemTy) -> do
+      s' <- unify p s k (TNamed (Ident "int"))
+      s'' <- unify p s' v elemTy
+      Right (Map.insert n (TSlice elemTy) s'')
+    (TSlice elemTy, TypeVarIndexable n k v) -> do
+      s' <- unify p s k (TNamed (Ident "int"))
+      s'' <- unify p s' v elemTy
+      Right (Map.insert n (TSlice elemTy) s'')
+    -- TypeVarIndexable ~ TMap: key unifies with map key, value with map value.
+    (TypeVarIndexable n k v, TMap mk mv) -> do
+      s' <- unify p s k mk
+      s'' <- unify p s' v mv
+      Right (Map.insert n (TMap mk mv) s'')
+    (TMap mk mv, TypeVarIndexable n k v) -> do
+      s' <- unify p s k mk
+      s'' <- unify p s' v mv
+      Right (Map.insert n (TMap mk mv) s'')
+    -- TypeVarIndexable ~ string: key must be int, value must be byte.
+    (TypeVarIndexable n k v, TNamed (Ident "string")) -> do
+      s' <- unify p s k (TNamed (Ident "int"))
+      s'' <- unify p s' v (TNamed (Ident "byte"))
+      Right (Map.insert n (TNamed (Ident "string")) s'')
+    (TNamed (Ident "string"), TypeVarIndexable n k v) -> do
+      s' <- unify p s k (TNamed (Ident "int"))
+      s'' <- unify p s' v (TNamed (Ident "byte"))
+      Right (Map.insert n (TNamed (Ident "string")) s'')
+    -- TypeVarIndexable ~ TypeVar: propagate the constraint.
+    (TypeVarIndexable n k v, TypeVar m) -> bindTypeVarIndexable n k v m
+    (TypeVar m, TypeVarIndexable n k v) -> bindTypeVarIndexable n k v m
+    -- TypeVarIndexable ~ concrete non-container: not indexable.
+    (TypeVarIndexable {}, TNamed _) -> Left (NotAnIndexable p t2) -- TODO better type system needed to allow named type indexing
+    (TNamed _, TypeVarIndexable {}) -> Left (NotAnIndexable p t1)
+    (TypeVarIndexable {}, TFunc {}) -> Left (NotAnIndexable p t2)
+    (TFunc {}, TypeVarIndexable {}) -> Left (NotAnIndexable p t1)
+    -- TypeVar: bind to the other type (with infinite type definition check)
+    (TypeVar n, _) -> bindTypeVar n t2
+    (_, TypeVar n) -> bindTypeVar n t1
     -- Named types
     (TNamed a, TNamed b)
       | a == b -> Right s
@@ -273,19 +337,19 @@ inferExpr env expr = case expr of
       tidx <- infer idx
       containerTy <- applySubstM (exprType te)
       case containerTy of
-        TSlice elemTy -> do
-          unifyM p (exprType tidx) (TNamed (Ident "int"))
-          return (EIndex ExprAnn { pos = p, ty = elemTy, isStmt = False } te tidx)
-        TMap keyTy valTy -> do
-          unifyM p (exprType tidx) keyTy
+        TNamed (Ident "opaque") ->
+          return (EIndex ExprAnn { pos = p, ty = TNamed (Ident "opaque"), isStmt = False } te tidx)
+        _ -> do
+          valTy <- freshTypeVar
+          cTy <- freshTypeVarIndexable (exprType tidx) valTy
+          unifyM p containerTy cTy
           return (EIndex ExprAnn { pos = p, ty = valTy, isStmt = False } te tidx)
-        _ -> return (EIndex ExprAnn { pos = p, ty = TNamed (Ident "opaque"), isStmt = False } te tidx)
 
     inferSliceLit ExprAnn{pos = p} exprs = do
       texprs <- mapM infer exprs
       case texprs of
         [] -> do
-          elemTv <- freshTVar
+          elemTv <- freshTypeVar
           return (ESliceLit ExprAnn { pos = p, ty = TSlice elemTv, isStmt = False } texprs)
         (te : rest) -> do
           mapM_ (\e' -> unifyM p (exprType te) (exprType e')) rest
@@ -293,8 +357,8 @@ inferExpr env expr = case expr of
           return (ESliceLit ExprAnn { pos = p, ty = TSlice (applySubst s (exprType te)), isStmt = False } texprs)
 
     inferMapLit ExprAnn{pos = p} = do
-      kTv <- freshTVar
-      vTv <- freshTVar
+      kTv <- freshTypeVar
+      vTv <- freshTypeVar
       return (EMapLit ExprAnn { pos = p, ty = TMap kTv vTv, isStmt = False })
 
     inferMatch ExprAnn{pos = p} scrut arms = do
@@ -329,14 +393,14 @@ inferExpr env expr = case expr of
         constrainPattern _ _ (PtVar _) = return ()
         constrainPattern p' scrutTy (PtBoolLit _) = unifyM p' scrutTy (TNamed (Ident "bool"))
         constrainPattern p' scrutTy (PtIntLit _) = do
-          tc <- freshConstrained tsInt
+          tc <- freshTypeVarConstrained tsInt
           unifyM p' scrutTy tc
         constrainPattern p' scrutTy (PtStrLit _) = unifyM p' scrutTy (TNamed (Ident "string"))
         constrainPattern p' scrutTy PtSliceEmpty = do
-          elemTv <- freshTVar
+          elemTv <- freshTypeVar
           unifyM p' scrutTy (TSlice elemTv)
         constrainPattern p' scrutTy (PtCons _ _) = do
-          elemTv <- freshTVar
+          elemTv <- freshTypeVar
           unifyM p' scrutTy (TSlice elemTv)
         constrainPattern _ _ (PtTuple _) = return ()
 
@@ -352,22 +416,24 @@ inferExpr env expr = case expr of
         patternBindings t (PtCons hd tl) = do
           elemTy <- case t of
             TSlice et -> return et
-            _ -> freshTVar
+            _ -> freshTypeVar
           hdBindings <- patternBindings elemTy hd
           tlBindings <- patternBindings t tl
           return (hdBindings ++ tlBindings)
         patternBindings _ (PtTuple pats) = do
-          results <- mapM (\pat -> do { tv <- freshTVar; patternBindings tv pat }) pats
+          results <- mapM (\pat -> do { tv <- freshTypeVar; patternBindings tv pat }) pats
           return (concat results)
 
     inferSpread ExprAnn{pos = p} e = do
       te <- infer e
-      s <- getSubst
-      case applySubst s (exprType te) of
-        st@(TSlice _) -> return (EVariadicSpread ExprAnn { pos = p, ty = st, isStmt = False } te)
-        t@(TNamed (Ident "opaque")) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te)
-        t@(TVar _) -> return (EVariadicSpread ExprAnn { pos = p, ty = t, isStmt = False } te)
-        t -> lift (Left (InvalidSpread p t))
+      containerTy <- applySubstM (exprType te)
+      case containerTy of
+        TNamed (Ident "opaque") ->
+          return (EVariadicSpread ExprAnn { pos = p, ty = containerTy, isStmt = False } te)
+        _ -> do
+          elemTv <- freshTypeVar
+          unifyM p containerTy (TSlice elemTv)
+          return (EVariadicSpread ExprAnn { pos = p, ty = TSlice elemTv, isStmt = False } te)
 
     inferApp ExprAnn{pos = p} f args = do
       tf <- infer f
@@ -383,8 +449,8 @@ inferExpr env expr = case expr of
         nt@(TNamed (Ident "opaque")) -> do
           resultTy <- lift (resultType p nt (length targs))
           return (EApplication ExprAnn { pos = p, ty = resultTy, isStmt = True } tf targs)
-        TVar _ -> do
-          resultTv <- freshTVar
+        TypeVar _ -> do
+          resultTv <- freshTypeVar
           unifyM p fTy (TFunc (map exprType targs) Nothing resultTv)
           return (EApplication ExprAnn { pos = p, ty = resultTv, isStmt = True } tf targs)
         _ -> lift (Left (NotAFunction p fTy))
@@ -439,13 +505,15 @@ inferExpr env expr = case expr of
 -- Main entry: runs the full inference pipeline on a parsed Expr tree.
 --
 --   1. Infer types (constraint generation + unification)
---   2. Apply substitution to resolve TVars
+--   2. Apply substitution to resolve TypeVars
 --   3. Default any remaining type variables
---   4. Reject any unresolved TVars as errors
+--   4. Reject any unresolved TypeVars as errors
 --   5. Compute isStmt annotations for codegen
 --   6. Insert unit<->struct{} coercion wrappers
-inferAndResolve :: Expr -> Either [InferError] Expr
-inferAndResolve expr = do
+-- | Run inference and resolution over an expression tree.
+-- Takes ParserState for TypeVar minting.
+inferAndResolve :: (Expr, ParserState) -> Either [InferError] Expr
+inferAndResolve (expr, pState) = do
   -- Map a function over every node in Expr tree (bottom up).
   let
     mapExpr :: (Expr -> Expr) -> Expr -> Expr
@@ -496,16 +564,6 @@ inferAndResolve expr = do
           EStrLit {}                  -> mempty
           EMapLit {}                  -> mempty
 
-  -- Find the maximum TVar ID in an Expr tree, so we can seed the counter above it.
-  let maxTVar :: Int
-      maxTVar = getMax $ foldMapExpr (\e -> Max (maximum (0 : map maxTy (exprTypes e)))) expr
-      maxTy (TVar n) = n
-      maxTy (TConstrained n _) = n
-      maxTy (TSlice t) = maxTy t
-      maxTy (TMap k v) = max (maxTy k) (maxTy v)
-      maxTy (TFunc ps mVar ret) = maximum (0 : map maxTy ps ++ maybe [] (\v -> [maxTy v]) mVar ++ [maxTy ret])
-      maxTy (TNamed _) = 0
-
   -- Apply substitution to every TypeExpr in an Expr tree.
   let applySubstExpr :: Subst -> Expr -> Expr
       applySubstExpr s = mapExpr go
@@ -534,41 +592,54 @@ inferAndResolve expr = do
           goParam (PTyped name t) = PTyped name (sub t)
           goParam (PVariadic name t) = PVariadic name (sub t)
 
-  -- Default remaining unresolved type variables:
-  -- - TConstrained: default to the set's default type (e.g. int for tsInt, float64 for tsFloat)
-  -- - Standalone TVars: default to opaque (from tuple patterns interacting with opaque builtins)
-  -- - TVars inside collections (TSlice, TMap): default to opaque
-  -- - TVars as direct TFunc params/returns: NOT defaulted (genuine inference failures,
-  --   caught by checkNoTVars as CannotInferType errors)
-  --
-  -- TODO: Standalone TVar defaulting exists because fog lacks a TupleType and
-  -- Go builtins like map access are opaque, so tuple-destructured variables
-  -- interacting only with opaque functions have no type constraints. Once fog
-  -- models Go builtin signatures with real types (or adds TupleType), this
-  -- blanket standalone-TVar defaulting can be removed.
-  let defaultRemainingTVars :: Expr -> Subst
-      defaultRemainingTVars = foldMapExpr (\e -> Map.unions (map (walk True) (exprTypes e)))
-        where
-          walk True  (TVar n)             = Map.singleton n (TNamed (Ident "opaque"))
-          walk False (TVar _)             = Map.empty
-          walk _     (TConstrained n ts)  = Map.singleton n (TNamed (tsDefault ts))
-          walk _     (TSlice t)           = walk True t
-          walk _     (TMap k v)           = Map.union (walk True k) (walk True v)
-          walk _     (TFunc ps mVar ret)  =
-            Map.unions (map (walk False) ps ++ maybe [] (\v -> [walk False v]) mVar ++ [walk False ret])
-          walk _     (TNamed _)           = Map.empty
+  -- Default remaining unresolved type variables.
+  -- Iterative process, only thinks about one layer of defaulting at a time,
+  -- which is critical for TypeVarIndexable case - the Indexable can't be defaulted
+  -- until it's key type has been.
+  -- TODO: blanket TypeVar -> opaque defaulting exists because fog's type system
+  -- is underbaked: it lacks eg. a TupleType and Go builtins like map access are
+  -- opaque, so vars interacting only with opaque builtins
+  -- have no type constraints. Once fog models Go builtin signatures properly,
+  -- this blanket default can be removed.
 
-  -- Collect all remaining TVars in an Expr tree as errors.
-  let checkNoTVars :: Expr -> [InferError]
-      checkNoTVars = foldMapExpr (\e -> let p = exprPos e in concatMap (collectTVars p) (exprTypes e))
+  let defaultLoop :: Expr -> Expr
+      defaultLoop e
+        | Map.null defaultSubst = e
+        | otherwise             = defaultLoop (applySubstExpr defaultSubst e)
         where
-          collectTVars p (TVar _)            = [CannotInferType p]
-          collectTVars p (TConstrained _ _)  = [CannotInferType p]
-          collectTVars p (TSlice t)          = collectTVars p t
-          collectTVars p (TMap k v)          = collectTVars p k ++ collectTVars p v
-          collectTVars p (TFunc ps mVar ret) =
-            concatMap (collectTVars p) ps ++ maybe [] (collectTVars p) mVar ++ collectTVars p ret
-          collectTVars _ (TNamed _)          = []
+          defaultSubst :: Subst
+          defaultSubst = foldMapExpr (\e' -> foldMap defaultType (exprTypes e')) e
+
+          defaultType (TypeVarConstrained n ts) = Map.singleton n (TNamed (tsDefault ts))
+          defaultType (TypeVarIndexable n k v) =
+            let indexableDefault = case k of
+                  TNamed name | name `Set.member` tsMembers tsInt -> Map.singleton n (TSlice v)
+                  TNamed _                                        -> Map.singleton n (TMap k v)
+                  -- Key not yet concrete (TypeVar, TypeVarConstrained, structurally
+                  -- invalid): wait. Either a later pass resolves it, or it
+                  -- survives to checkNoTypeVars.
+                  _                                               -> Map.empty
+            in indexableDefault <> defaultType k <> defaultType v
+          defaultType (TypeVar n) = Map.singleton n (TNamed (Ident "opaque"))
+          defaultType (TSlice t) = defaultType t
+          defaultType (TMap k v) = defaultType k <> defaultType v
+          -- TFunc params/returns are not defaulted here: a TypeVar that survives
+          -- only in a TFunc signature is a genuine inference failure.
+          defaultType (TFunc {}) = mempty
+          defaultType (TNamed _) = mempty
+
+  -- Collect all remaining TypeVars in an Expr tree as errors.
+  let checkNoTypeVars :: Expr -> [InferError]
+      checkNoTypeVars = foldMapExpr (\e -> let p = exprPos e in concatMap (collectTypeVars p) (exprTypes e))
+        where
+          collectTypeVars _ (TNamed _)          = []
+          collectTypeVars p (TSlice t)          = collectTypeVars p t
+          collectTypeVars p (TMap k v)          = collectTypeVars p k ++ collectTypeVars p v
+          collectTypeVars p (TFunc ps mVar ret) =
+            concatMap (collectTypeVars p) ps ++ maybe [] (collectTypeVars p) mVar ++ collectTypeVars p ret
+          collectTypeVars p (TypeVar _)              = [CannotInferType p]
+          collectTypeVars p (TypeVarConstrained _ _) = [CannotInferType p]
+          collectTypeVars p (TypeVarIndexable _ k v) = [CannotInferType p] ++ collectTypeVars p k ++ collectTypeVars p v
 
   -- Compute isStmt annotations for codegen.
   -- Post-order traversal: set each node's isStmt based on whether it or any
@@ -653,15 +724,15 @@ inferAndResolve expr = do
                 (Nothing, _)    -> error "coerceArgs: excess args on non-variadic function (unreachable)"
           coerceArgs _ args = map go args
 
-  let initState = InferState { inferSubst = Map.empty, inferNextTVar = maxTVar + 1 }
+  let initState = InferState { inferSubst = Map.empty, iNextTypeVarId = pNextTypeVarId pState }
   -- Step 1: infer types (constraint generation + unification)
   (inferred, finalState) <- first (:[]) $ runStateT (inferExpr preludeEnv expr) initState
-  -- Step 2: apply substitution to resolve TVars
+  -- Step 2: apply substitution to resolve TypeVars
   let resolved = applySubstExpr (inferSubst finalState) inferred
   -- Step 3: default remaining type variables
-  let afterDefaults = applySubstExpr (defaultRemainingTVars resolved) resolved
-  -- Step 4: reject any unresolved TVars as errors
-  case checkNoTVars afterDefaults of
+  let afterDefaults = defaultLoop resolved
+  -- Step 4: reject any unresolved TypeVars as errors
+  case checkNoTypeVars afterDefaults of
     [] -> pure ()
     errs -> Left errs
   -- Step 5: compute isStmt annotations for codegen
@@ -675,15 +746,16 @@ prettyType (TSlice t) = "[]" <> prettyType t
 prettyType (TMap k v) = "map[" <> prettyType k <> "]" <> prettyType v
 prettyType (TFunc ps mVar ret) =
   "func(" <> intercalate ", " (map prettyType ps ++ maybe [] (\v -> [prettyType v <> "..."]) mVar) <> ") " <> prettyType ret
-prettyType (TVar _) = "unknown type"
-prettyType (TConstrained _ ts) = let Ident n = tsDefault ts in T.unpack n
+prettyType (TypeVar _) = "unknown type"
+prettyType (TypeVarConstrained _ ts) = let Ident n = tsDefault ts in T.unpack n
+prettyType (TypeVarIndexable _ k v) = "indexable[" <> prettyType k <> "]" <> prettyType v
 
 prettyInferError :: InferError -> String
 prettyInferError (TypeMismatch    p t1 t2)        = sourcePosPretty p <> ": error: type mismatch: " <> prettyType t1 <> " vs " <> prettyType t2
 prettyInferError (UnknownVariable p (Ident name)) = sourcePosPretty p <> ": error: unknown variable: " <> T.unpack name
 prettyInferError (NotAFunction    p t)            = sourcePosPretty p <> ": error: not a function: " <> prettyType t
+prettyInferError (NotAnIndexable    p t)          = sourcePosPretty p <> ": error: not an indexable: " <> prettyType t
 prettyInferError (CannotInferType p)              = sourcePosPretty p <> ": error: cannot infer type"
-prettyInferError (InfiniteType    p n t)          = sourcePosPretty p <> ": error: infinite type: " <> prettyType (TVar n) <> " occurs in " <> prettyType t
+prettyInferError (InfiniteType    p n t)          = sourcePosPretty p <> ": error: infinite type: " <> prettyType (TypeVar n) <> " occurs in " <> prettyType t
 prettyInferError (NamedPUnit      p (Ident name)) = sourcePosPretty p <> ": error: named unit parameter: " <> T.unpack name
-prettyInferError (InvalidSpread   p t)            = sourcePosPretty p <> ": error: invalid spread: " <> prettyType t <> ", unexpected ...x"
 prettyInferError (MissingSpread   p t)            = sourcePosPretty p <> ": error: missing spread: " <> prettyType t <> ", expected ...x"

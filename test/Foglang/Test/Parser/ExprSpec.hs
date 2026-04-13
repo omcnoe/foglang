@@ -2,7 +2,7 @@ module Foglang.Test.Parser.ExprSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Binding (..), Expr (..), ExprAnn (..), FloatLit (..), Ident (..), IntLit (..), MatchArm (..), Param (..), TypeExpr (..))
-import Foglang.Parser (SC(..), runParse, scn)
+import Foglang.Parser (SC(..), evalParse, scn)
 import Foglang.Parser.Expr (childBlockExprSequence)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
@@ -44,16 +44,17 @@ stripPos (EMatch _ scrut arms) =
 stripPos (ECoerce _ c inner) =
   ECoerce a c (stripPos inner)
 
--- Normalize TypeExpr: replace TVars with the placeholder.
+-- Normalize TypeExpr: replace TypeVars with the placeholder.
 stripType :: TypeExpr -> TypeExpr
-stripType (TVar _) = ty a
-stripType (TConstrained _ _) = ty a
+stripType (TNamed t) = TNamed t
 stripType (TSlice t) = TSlice (stripType t)
 stripType (TMap k v) = TMap (stripType k) (stripType v)
 stripType (TFunc ps mv r) = TFunc (map stripType ps) (fmap stripType mv) (stripType r)
-stripType t = t
+stripType (TypeVar _) = ty a
+stripType (TypeVarConstrained _ _) = ty a
+stripType (TypeVarIndexable _ _ _) = ty a
 
--- Normalize params: replace TVars in param types with placeholder.
+-- Normalize params: replace TypeVars in param types with placeholder.
 stripParam :: Param -> Param
 stripParam PUnit = PUnit
 stripParam (PTyped n t) = PTyped n (stripType t)
@@ -420,7 +421,7 @@ spec = do
           )
         ]
 
-  let parseExpr s = runParse (childBlockExprSequence <* runSC scn <* eof) "ExprSpec.hs" s
+  let parseExpr s = evalParse (childBlockExprSequence <* runSC scn <* eof) "ExprSpec.hs" s
 
   describe "sequence parses" $ do
     it "let" $

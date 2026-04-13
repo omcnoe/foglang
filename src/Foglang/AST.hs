@@ -84,8 +84,12 @@ data TypeExpr
   | TSlice TypeExpr -- slice type, e.g. []int; also the type of a variadic parameter var inside a function body
   | TMap TypeExpr TypeExpr -- map type, e.g. map[int][]int
   | TFunc [TypeExpr] (Maybe TypeExpr) TypeExpr -- fixed param types, optional variadic param type, return type
-  | TVar Int -- type variable, resolved during type inference
-  | TConstrained Int TypeSet -- type variable constrained to a set of numeric types
+  -- type variables - resolved to concrete types during inference
+  -- TODO consider design that moves unresolved types out of TypeExpr - distinguish successful inference pass at Haskell type level
+  | TypeVar Int
+  -- TODO these are temporary until we have stronger type system that can represent such concepts natively
+  | TypeVarConstrained Int TypeSet -- numeric literals, constrained to a set of numeric types
+  | TypeVarIndexable Int TypeExpr TypeExpr -- type must support indexing `[x]` operator: (key type, value type)
   deriving (Eq, Show)
 
 -- Is a type a unit-like empty type (() or struct{})?
@@ -135,7 +139,7 @@ bindingType ps retTy = TFunc fixedTys mVarTy retTy
     isVariadic _ = False
 
 -- Annotation carried by every Expr node. The parser populates pos and ty
--- (with TVars for unknown types); inference resolves ty; a post-inference
+-- (with TypeVars for unknown types); inference resolves ty; a post-inference
 -- pass computes isStmt.
 data ExprAnn = ExprAnn
   { pos    :: SourcePos,

@@ -2,7 +2,7 @@ module Foglang.Test.Parser.IdentSpec (spec) where
 
 import Data.Either (isLeft)
 import Foglang.AST (Ident (..))
-import Foglang.Parser (runParse)
+import Foglang.Parser (evalParse)
 import Foglang.Parser.Ident (ident)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import Text.Megaparsec (eof)
@@ -23,7 +23,7 @@ spec = do
           "42"
         ]
 
-  let parseIdent s = runParse (ident <* eof) "IdentSpec.hs" s
+  let parseIdent s = evalParse (ident <* eof) "IdentSpec.hs" s
 
   describe "ident parses" $ do
     it "identifiers" $

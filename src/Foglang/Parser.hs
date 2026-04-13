@@ -1,14 +1,17 @@
 module Foglang.Parser
   ( -- Types
     Parser,
+    ParserState (..),
     SC (..),
     LineIndent (..),
     -- Running
     runParse,
+    evalParse,
     scn,
     -- Fresh type vars
-    freshTVar,
-    freshTConstrained,
+    freshTypeVar,
+    freshTypeVarConstrained,
+    freshTypeVarIndexable,
     -- Vocabulary (using envSC from ReaderT)
     keyword,
     operator,
@@ -32,16 +35,16 @@ where
 
 import Control.Monad (when)
 import Control.Monad.Reader (Reader, asks, local, runReader)
-import Control.Monad.State.Strict (MonadState (..), StateT, evalStateT, gets)
+import Control.Monad.State.Strict (StateT, get, put, runStateT)
 import Data.Char (isDigit, isLetter)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Foglang.AST (TypeExpr (..), TypeSet)
 import Text.Megaparsec (ParseErrorBundle, ParsecT, Pos, choice, getSourcePos, lookAhead, notFollowedBy, optional, runParserT, satisfy, try, unPos, (<|>))
 import Text.Megaparsec.Char (space1, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 import Text.Megaparsec.Pos (mkPos, sourceColumn, sourceLine)
+import Foglang.AST (TypeExpr (..), TypeSet)
 
 -- ----------------------------------------------------------------------------
 -- Core types
@@ -59,9 +62,9 @@ data ParserEnv = ParserEnv
   }
 
 -- | Parser state.
--- stateNextTVar: next fresh TVar ID.
+-- stateNextTypeVar: next fresh TypeVar ID.
 data ParserState = ParserState
-  { stateNextTVar :: Int }
+  { pNextTypeVarId :: Int }
 
 -- | Main parser type.
 -- StateT ParserState: mutable parser state. Outermost so that custom state
@@ -95,29 +98,37 @@ scn =
       (L.skipLineComment "//")
       (L.skipBlockComment "/*" "*/")
 
--- | Run a parser to completion. Initial ambient SC is scn (unconstrained).
-runParse :: Parser a -> String -> T.Text -> Either (ParseErrorBundle T.Text Void) a
+-- | Run a parser to completion, returning the result together with the final
+-- parser state. Initial ambient SC is scn (unconstrained).
+runParse :: Parser a -> String -> T.Text -> Either (ParseErrorBundle T.Text Void) (a, ParserState)
 runParse p name input =
-  runReader (runParserT (evalStateT p initState) name input) initEnv
+  runReader (runParserT (runStateT p initState) name input) initEnv
   where
-    initState = ParserState { stateNextTVar = 0 }
+    initState = ParserState { pNextTypeVarId = 0 }
     initEnv = ParserEnv { envSC = scn, envSemi = False, envFoldCol = LineIndent 0, envFoldLine = mkPos 1 }
+
+-- | Run a parser to completion, discarding the final parser state.
+-- Convenience for callers that only care about the parsed value.
+evalParse :: Parser a -> String -> T.Text -> Either (ParseErrorBundle T.Text Void) a
+evalParse p name input = fst <$> runParse p name input
 
 -- ----------------------------------------------------------------------------
 -- Fresh type variables
 
--- | Mint a fresh type variable.
-freshTVar :: Parser TypeExpr
-freshTVar = do
-  n <- gets stateNextTVar
-  put ParserState { stateNextTVar = n + 1 }
-  return (TVar n)
+freshTypeVarId :: Parser Int
+freshTypeVarId = do
+  s <- get
+  put s { pNextTypeVarId = pNextTypeVarId s + 1 }
+  pure (pNextTypeVarId s)
 
--- | Mint a fresh constrained type variable (for literals etc.)
-freshTConstrained :: TypeSet -> Parser TypeExpr
-freshTConstrained s = do
-  TVar n <- freshTVar
-  return (TConstrained n s)
+freshTypeVar :: Parser TypeExpr
+freshTypeVar = TypeVar <$> freshTypeVarId
+
+freshTypeVarConstrained :: TypeSet -> Parser TypeExpr
+freshTypeVarConstrained ts = (`TypeVarConstrained` ts) <$> freshTypeVarId
+
+freshTypeVarIndexable :: TypeExpr -> TypeExpr -> Parser TypeExpr
+freshTypeVarIndexable k v = (\i -> TypeVarIndexable i k v) <$> freshTypeVarId
 
 -- ----------------------------------------------------------------------------
 -- Vocabulary

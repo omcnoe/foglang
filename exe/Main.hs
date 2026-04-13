@@ -15,5 +15,5 @@ main = do
       src <- TIO.readFile path
       case runParse (fogFile <* eof) path src of
         Left err -> fail (show err)
-        Right ff -> genGoFile ff >>= TIO.putStr
+        Right (ff, pstate) -> genGoFile ff pstate >>= TIO.putStr
     _ -> putStrLn "usage: fog <file.fog>"
