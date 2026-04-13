@@ -102,10 +102,10 @@ tsFloat = TypeSet
 -- the substitution's union-find forest. Constraints (numeric / indexable)
 -- are NOT shapes - they live only in substitution Roots, never on tree nodes.
 data ConcreteShape
-  = CNamed !Ident
-  | CSlice !TypeExpr
-  | CMap   !TypeExpr !TypeExpr
-  | CFunc  ![TypeExpr] !(Maybe TypeExpr) !TypeExpr
+  = CNamed Ident
+  | CSlice TypeExpr
+  | CMap   TypeExpr TypeExpr
+  | CFunc  [TypeExpr] (Maybe TypeExpr) TypeExpr
   deriving (Eq, Show)
 
 -- | Inference-time type annotation on Expr nodes.
@@ -120,11 +120,10 @@ data ConcreteShape
 -- the exact hole. The manual Eq instance ignores this position so that
 -- structural comparison in tests is position-independent.
 data TypeExpr
-  = TVar   !SourcePos !Int
-  | TShape !ConcreteShape
+  = TVar   SourcePos Int
+  | TShape ConcreteShape
   deriving (Show)
-
-instance Eq TypeExpr where
+instance Eq TypeExpr where -- Eq ignores SourcePos
   TVar _ n1  == TVar _ n2  = n1 == n2
   TShape c1  == TShape c2  = c1 == c2
   _          == _          = False
@@ -158,10 +157,10 @@ isWildcardShape _                         = False
 
 -- | Ground type: codegen's input. No variables, no constraints.
 data GroundType
-  = TyNamed !Ident
-  | TySlice !GroundType
-  | TyMap   !GroundType !GroundType
-  | TyFunc  ![GroundType] !(Maybe GroundType) !GroundType
+  = TyNamed Ident
+  | TySlice GroundType
+  | TyMap   GroundType GroundType
+  | TyFunc  [GroundType] (Maybe GroundType) GroundType
   deriving (Eq, Show)
 
 pattern UnitType :: GroundType
@@ -185,8 +184,8 @@ isWildcard _                          = False
 -- TypeExpr; after resolution it's GroundType.
 data Param t
   = PUnit
-  | PTyped    !Ident !t
-  | PVariadic !Ident !t
+  | PTyped    Ident t
+  | PVariadic Ident t
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 paramType :: Param GroundType -> GroundType
@@ -195,15 +194,17 @@ paramType (PTyped _ t)     = t
 paramType (PVariadic _ t)  = t
 
 -- | Binding: parameters, declared return type, RHS expression.
-data Binding t = Binding ![Param t] !t !(Expr t)
+data Binding t = Binding [Param t] t (Expr t)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- | Expression annotation.
 data ExprAnn t = ExprAnn
-  { pos    :: !SourcePos,
-    ty     :: !t,
-    isStmt :: !Bool
-  } deriving (Eq, Show, Functor, Foldable, Traversable)
+  { pos    :: SourcePos,
+    ty     :: t,
+    isStmt :: Bool
+  } deriving (Show, Functor, Foldable, Traversable)
+instance Eq t => Eq (ExprAnn t) where -- Eq ignores SourcePos
+  ExprAnn _ t1 s1 == ExprAnn _ t2 s2 = (t1, s1) == (t2, s2)
 
 -- | Implicit-coercion kind applied at a type boundary.
 data Coercion
@@ -214,37 +215,39 @@ data Coercion
 -- and nested Bindings. Parser produces `Expr TypeExpr`; inference resolves
 -- it to `Expr GroundType` before codegen consumes it.
 data Expr t
-  = EVar             !(ExprAnn t) !Ident
-  | EIntLit          !(ExprAnn t) !IntLit
-  | EFloatLit        !(ExprAnn t) !FloatLit
-  | EStrLit          !(ExprAnn t) !StringLit
-  | EUnitLit         !(ExprAnn t)
-  | ELet             !(ExprAnn t) !Ident !(Binding t) !(Maybe (Expr t))
-  | ELambda          !(ExprAnn t) !(Binding t)
-  | EIf              !(ExprAnn t) !(Expr t) !(Expr t) !(Expr t)
-  | EInfixOp         !(ExprAnn t) !(Expr t) !T.Text !(Expr t)
-  | EApplication     !(ExprAnn t) !(Expr t) ![Expr t]
-  | EIndex           !(ExprAnn t) !(Expr t) !(Expr t)
-  | ESliceLit        !(ExprAnn t) ![Expr t]
-  | EMapLit          !(ExprAnn t)
-  | ESequence        !(ExprAnn t) ![Expr t]
-  | EVariadicSpread  !(ExprAnn t) !(Expr t)
-  | EMatch           !(ExprAnn t) !(Expr t) ![MatchArm t]
-  | ECoerce          !(ExprAnn t) !Coercion !(Expr t)
+  = EVar            (ExprAnn t) Ident
+  | EIntLit         (ExprAnn t) IntLit
+  | EFloatLit       (ExprAnn t) FloatLit
+  | EStrLit         (ExprAnn t) StringLit
+  | EUnitLit        (ExprAnn t)
+  | ELet            (ExprAnn t) Ident (Binding t) (Maybe (Expr t))
+  | ELambda         (ExprAnn t) (Binding t)
+  | EIf             (ExprAnn t) (Expr t) (Expr t) (Expr t)
+  | EInfixOp        (ExprAnn t) (Expr t) T.Text (Expr t)
+  | EApplication    (ExprAnn t) (Expr t) [Expr t]
+  | EIndex          (ExprAnn t) (Expr t) (Expr t)
+  | ESliceLit       (ExprAnn t) [Expr t]
+  | EMapLit         (ExprAnn t)
+  | ESequence       (ExprAnn t) [Expr t]
+  | EVariadicSpread (ExprAnn t) (Expr t)
+  | EMatch          (ExprAnn t) (Expr t) [MatchArm t]
+  | ECoerce         (ExprAnn t) Coercion (Expr t)
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
-data MatchArm t = MatchArm !SourcePos !Pattern !(Expr t)
-  deriving (Eq, Show, Functor, Foldable, Traversable)
+data MatchArm t = MatchArm SourcePos Pattern (Expr t)
+  deriving (Show, Functor, Foldable, Traversable)
+instance Eq t => Eq (MatchArm t) where -- Eq ignores SourcePos
+  MatchArm _ p1 b1 == MatchArm _ p2 b2 = (p1, b1) == (p2, b2)
 
 data Pattern
   = PtWildcard
-  | PtVar      !Ident
-  | PtIntLit   !IntLit
-  | PtStrLit   !StringLit
-  | PtBoolLit  !Bool
+  | PtVar      Ident
+  | PtIntLit   IntLit
+  | PtStrLit   StringLit
+  | PtBoolLit  Bool
   | PtSliceEmpty
-  | PtCons     !Pattern !Pattern
-  | PtTuple    ![Pattern]
+  | PtCons     Pattern Pattern
+  | PtTuple    [Pattern]
   deriving (Eq, Show)
 
 exprAnn :: Expr t -> ExprAnn t
@@ -307,17 +310,17 @@ newtype PackageClause = PackageClause Ident
 
 data ImportAlias
   = Default
-  | Alias !Ident
+  | Alias Ident
   | Dot
   | Blank
   deriving (Eq, Show)
 
-data ImportDecl = ImportDecl !ImportAlias !T.Text
+data ImportDecl = ImportDecl ImportAlias T.Text
   deriving (Eq, Show)
 
-data Header = Header !PackageClause ![ImportDecl]
+data Header = Header PackageClause [ImportDecl]
   deriving (Eq, Show)
 
 -- | Parsed fog file, parametric over the type payload.
-data FogFile t = FogFile !Header !(Expr t)
-  deriving (Eq, Show, Functor, Foldable, Traversable)
+data FogFile t = FogFile Header (Expr t)
+  deriving (Show, Functor, Foldable, Traversable)

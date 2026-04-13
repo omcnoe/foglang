@@ -50,27 +50,27 @@ data Constraint
   -- ^ Indexable: the variable's type must support `x[k]` with the key and
   -- value TypeExpr given. Resolves to TSlice / TMap / string / ... when
   -- the key shape is concrete at resolution time.
-  deriving (Eq, Show)
+  deriving (Show)
 
 -- | Contents of an equivalence-class representative. Either a fully concrete
 -- shape (narrowed to its final structure) or a constraint (still partial).
 data RootContent
   = RConcrete   !ConcreteShape
   | RConstraint !Constraint
-  deriving (Eq, Show)
+  deriving (Show)
 
 -- | A substitution map entry. A TypeVar ID that doesn't appear in the map
 -- is unbound (still freshly minted, not yet constrained).
 data UFEntry
   = Link !Int          -- ^ forwarding pointer - ask the referenced ID
   | Root !RootContent  -- ^ this ID is a representative; its meaning is here
-  deriving (Eq, Show)
+  deriving (Show)
 
 -- | The substitution. A newtype over IntMap so that all mutation happens
 -- through the module's API; there's no raw-map escape hatch for callers to
 -- bypass path compression.
 newtype Subst = Subst { unSubst :: IntMap.IntMap UFEntry }
-  deriving (Eq, Show)
+  deriving (Show)
 
 emptySubst :: Subst
 emptySubst = Subst IntMap.empty
@@ -86,7 +86,7 @@ emptySubst = Subst IntMap.empty
 data FindResult
   = FoundUnbound !Int
   | FoundRoot    !Int !RootContent
-  deriving (Eq, Show)
+  deriving (Show)
 
 -- | Chase the chain starting at `n`, compressing as we unwind. Every
 -- intermediate Link visited is rewritten to point directly at the final

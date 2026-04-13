@@ -16,6 +16,8 @@ type Scope = Map.Map Ident Int
 emptyScope :: Scope
 emptyScope = Map.empty
 
+data BodyMode = Returning | Void
+
 -- Bind a name in scope. Returns the Go-level name and updated scope.
 -- Shadows produce _shadowN suffixes. Fog identifiers ending with _shadow\d+
 -- get "double-mangled" (start at _shadow1 instead of bare) to avoid collisions
@@ -182,8 +184,6 @@ genIfChain scope mode indent cond then' else' =
     <> "}"
     <> genElsePart scope mode indent else'
     <> "\n"
-
-data BodyMode = Returning | Void
 
 -- Generate a match expression as a statement-level if/else chain.
 genMatchBody :: Scope -> BodyMode -> Int -> Expr GroundType -> [MatchArm GroundType] -> T.Text

@@ -32,10 +32,20 @@ data InferError
   | CannotInferType SourcePos
   | NamedPUnit SourcePos Ident
   | MissingSpread SourcePos TypeExpr
-  deriving (Eq, Show)
+  deriving (Show)
+instance Eq InferError where -- Eq ignores SourcePos
+  UnknownVariable _ i1     == UnknownVariable _ i2     = i1 == i2
+  TypeMismatch _ e1 a1     == TypeMismatch _ e2 a2     = (e1, a1) == (e2, a2)
+  InfiniteType _ n1 t1     == InfiniteType _ n2 t2     = (n1, t1) == (n2, t2)
+  NotAFunction _ t1        == NotAFunction _ t2        = t1 == t2
+  NotAnIndexable _ t1      == NotAnIndexable _ t2      = t1 == t2
+  CannotInferType _        == CannotInferType _        = True
+  NamedPUnit _ i1          == NamedPUnit _ i2          = i1 == i2
+  MissingSpread _ t1       == MissingSpread _ t2       = t1 == t2
+  _                        == _                        = False
 
 -- Inference state: substitution + fresh TypeVar counter.
-data InferState = InferState { inferSubst :: !Subst, iNextTypeVarId :: !Int }
+data InferState = InferState { inferSubst :: Subst, iNextTypeVarId :: Int }
 
 -- StateT for short-circuit on first inference error via Either.
 type Infer = StateT InferState (Either InferError)
@@ -76,10 +86,10 @@ putSubst s = modify (\st -> st { inferSubst = s })
 -- that carries a constraint. Used by unify and inferExpr to dispatch on
 -- the type's current known state without chasing Link chains repeatedly.
 data TypeView
-  = VShape !ConcreteShape
-  | VVarUnbound !Int
-  | VVarConstraint !Int !Constraint
-  deriving (Eq, Show)
+  = VShape         ConcreteShape
+  | VVarUnbound    Int
+  | VVarConstraint Int Constraint
+  deriving (Show)
 
 -- | Resolve a TypeExpr through the substitution to its current view,
 -- compressing paths along the way (inside `find`).
