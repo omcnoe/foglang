@@ -141,33 +141,29 @@ newtype Subst = Subst { unSubst :: IntMap.IntMap UnresolvedType }
 substEmpty :: Subst
 substEmpty = Subst { unSubst = IntMap.empty }
 
--- | Find substitution for an UnresolvedType in the substitution forest.
--- Chases forward type var links, does path compression map rewrite.
--- Identity for inputs that are already head resolved.
-substFind :: UnresolvedType -> Subst -> (UnresolvedType, Subst)
-substFind t@(UTyHeadResolved _ _) sub = (t, sub)
-substFind (UTyVar origPos origNxtPtr) subst0 = (foundUTy, subst1)
-  where
-    (foundUTy, subst1) = snd $ walk origNxtPtr subst0
-
-    -- Chases forward links, path-compressing on the way back.
-    -- Returns (head ptr, head ty, updated subst). Head ptr threaded for path compression,
-    -- caller ultimately only wants (head ty, updated subst).
-    walk :: TypeVarPtr -> Subst -> (TypeVarPtr, (UnresolvedType, Subst))
-    walk curPtr@(TypeVarPtr curPtrInt) subst =
-      case IntMap.lookup curPtrInt (unSubst subst) of
-        Nothing ->
-          -- curPtr is dangling, not in map, no resolved head
-          (curPtr, (UTyVar origPos curPtr, subst))
-        Just chainHead@(UTyHeadResolved {}) ->
-          -- curPtr is chain head (a WHNF UTyHeadResolved), stop chasing
-          (curPtr, (chainHead, subst))
-        Just (UTyVar linkPos linkNxtPtr) ->
-          -- curPtr is a link in chain, chase rest of chain to head, then rewrite curPtr to point directly at head
-          -- Why not replace curPtr with head? Chain head is only WHNF representation of type, not always fully resolved,
-          -- may be mutated further. All unifying type vars in given tree must point at single head.
-          let (chainHeadPtr, (chainHeadTy, Subst updatedSubst)) = walk linkNxtPtr subst
-          in (chainHeadPtr, (chainHeadTy, Subst (IntMap.insert curPtrInt (UTyVar linkPos chainHeadPtr) updatedSubst)))
+-- | Walk the substitution forest from `curPtr` to its tree root.
+-- Path-compresses on the way back: every link visited is rewritten to
+-- point directly at the root.
+--
+-- Returns (rootPtr, rootValue, updatedSubst):
+--   * `rootPtr`      - id of the root reached.
+--   * `rootValue`    - `Nothing` if the root is unbound (no entry in the map);
+--                      `Just hr` if the root is bound to that head-resolved type.
+--   * `updatedSubst` - updated subst with path compression applied.
+substFind :: TypeVarPtr -> Subst -> (TypeVarPtr, Maybe HeadResolvedType, Subst)
+substFind curPtr@(TypeVarPtr curPtrInt) subst =
+  case IntMap.lookup curPtrInt (unSubst subst) of
+    Nothing ->
+      -- curPtr has no entry (dangling); it is itself an (unbound) tree root.
+      (curPtr, Nothing, subst)
+    Just (UTyHeadResolved _ hr) ->
+      -- curPtr is the tree root, bound to hr.
+      (curPtr, Just hr, subst)
+    Just (UTyVar linkPos nxtPtr) ->
+      -- curPtr is a link in chain, chase rest of chain to root, then path compress by rewriting curPtr to point directly at root.
+      let (rootPtr, mRootHr, Subst subst') = substFind nxtPtr subst -- recursively path compresses along whole chain
+      in (rootPtr, mRootHr, Subst (IntMap.insert curPtrInt (UTyVar linkPos rootPtr) subst'))
+      -- end result: `A -> B -> C -> ROOT` becomes `A -> ROOT; B -> ROOT; C -> ROOT}
 
 -- Bind the TypeVarPtr n to an UnresolvedType. Forming either a UTyVar link or UTyHeadResolved head in the substitution forest.
 substBind :: TypeVarPtr -> UnresolvedType -> Subst -> Subst
