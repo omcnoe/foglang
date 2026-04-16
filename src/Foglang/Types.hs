@@ -6,8 +6,8 @@
 --     into the substitution forest (`UTyVar`) or a WHNF type
 --     (`UTyHeadResolved`).
 --   * `HeadResolvedType` - inference internal, weak head normal form of a
---     type. Head resolved, but may contain `UnresolvedType` children.
---     Used inside union find substitution forest roots.
+--     type or type constraint. Head resolved, but may contain `UnresolvedType`
+--     children. Used inside union find substitution forest roots.
 --   * `ResolvedType` - inference output/codegen input. Fully concrete type
 --     that can be mapped 1:1 to Go source output.
 --
@@ -81,19 +81,28 @@ instance Eq UnresolvedType where -- Eq ignores SourcePos
 
 -- | A WHNF type, used inside type inference as union find substitution forest roots.
 -- Head is resolved, but children may still be `UTyVar`.
+-- Either a terminal, or a constraint that may be narrowed later.
 data HeadResolvedType
-  = HRTyNamed       Ident
-  | HRTySlice       UnresolvedType
-  | HRTyMap         UnresolvedType UnresolvedType
-  | HRTyFunc        [UnresolvedType] (Maybe UnresolvedType) UnresolvedType
-  | HRTyUnit        -- ^ `()`
-  | HRTyEmptyStruct -- ^ `struct{}`
-  | HRTyAny         -- ^ any/interface{}
-  | HRTyOpaque      -- ^ Fog type-system gap! Bypass fog type checking.
-  -- Constraints:
-  | HRTyIntLit      -- ^ integer literal, resolves to member of `intLitTypes`
-  | HRTyFloatLit    -- ^ float literal, resolves to member of `floatLitTypes`
-  | HRTyIndexable   UnresolvedType UnresolvedType -- ^ resolves to indexable instance (slice/map/string) when key shape is concrete.
+  = HRTerminal   TerminalType
+  | HRConstraint ConstraintType
+
+-- Head resolved terminal type: unresolved children, can't narrow
+data TerminalType
+  = TyNamed       Ident
+  | TySlice       UnresolvedType
+  | TyMap         UnresolvedType UnresolvedType
+  | TyFunc        [UnresolvedType] (Maybe UnresolvedType) UnresolvedType
+  | TyUnit        -- ^ `()`
+  | TyEmptyStruct -- ^ `struct{}`
+  | TyAny         -- ^ any/interface{}
+  | TyOpaque      -- ^ Fog type-system gap! Bypass fog type checking.
+  deriving (Eq, Show)
+
+-- Head resolved constraint type: unresolved children, can narrow
+data ConstraintType
+  = ConIntLit      -- ^ narrows to member of `intLitTypes`
+  | ConFloatLit    -- ^ narrows to member of `floatLitTypes`
+  | ConIndexable   UnresolvedType UnresolvedType -- ^ narrows to indexable instance (slice/map/string) when key shape is concrete
   deriving (Eq, Show)
 
 -- | Complete, concrete type, ready for codegen.
@@ -104,8 +113,8 @@ data ResolvedType
   | RTyFunc        [ResolvedType] (Maybe ResolvedType) ResolvedType
   | RTyUnit
   | RTyEmptyStruct
-  | RTyOpaque
   | RTyAny
+  | RTyOpaque
   deriving (Eq, Show)
 
 -- ----------------------------------------------------------------------------
@@ -122,11 +131,11 @@ intLitTypes = Set.fromList $ map Ident
 floatLitTypes :: Set.Set Ident
 floatLitTypes = Set.fromList $ map Ident ["float32", "float64"]
 
--- | Default concrete type an unresolved `HRTyIntLit` takes at resolution.
+-- | Default ResolvedType an unresolved `ConIntLit` takes
 intLitDefault :: Ident
 intLitDefault = Ident "int"
 
--- | Default concrete type an unresolved `HRTyFloatLit` takes at resolution.
+-- | Default ResolvedType an unresolved `ConFloatLit` takes
 floatLitDefault :: Ident
 floatLitDefault = Ident "float64"
 
