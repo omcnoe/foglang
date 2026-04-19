@@ -1,59 +1,26 @@
+{-# LANGUAGE DeriveTraversable #-}
+
 -- | Foglang type system
--- Type representations, and the union-find substitution used by inference.
---
--- Three type representations flow through the pipeline:
---   * `UnresolvedType` - parser output/inference input. Either a reference
---     into the substitution forest (`UTyVar`) or a WHNF type
---     (`UTyHeadResolved`).
---   * `HeadResolvedType` - inference internal, weak head normal form of a
---     type or type constraint. Head resolved, but may contain `UnresolvedType`
---     children. Used inside union find substitution forest roots.
---   * `ResolvedType` - inference output/codegen input. Fully concrete type
---     that can be mapped 1:1 to Go source output.
---
--- Type inference's responsibility is to transform every `UnresolvedType`
--- into a `ResolvedType` using union-find.
---
--- Why union find?
--- Original design had simple `Map Int (Type/TypeVar)`, and eagerly rewrote
--- the AST until all TypeVar were removed. The union-find approach has two
--- key advantages:
---   1. Lazy substitution forest, building up unifying trees instead of
---      repeatedly rewriting the AST. Only a single AST rewrite at the end,
---      once all types are resolved.
---   2. Path compression on a substitution tree lookups - traversing the
---      tree anyway, cheap to rewrite it at the same time.
---
--- Each tree in the forest represents all type vars that must unify together
--- to pass type checking.
--- Parallel trees can exist with same value stored in their root nodes without
--- being merged, if type usages don't intersect.
---
--- During inference root holds WHNF of the type (`HeadResolvedType`).
--- At resolution, the whole tree collapses to one ResolvedType value shared
--- by every member.
---
--- WHNF? Only "head" of the type is resolved eg. `HRTySlice` holding an
--- `UnresolvedType`. These unresolved parts are pointers to nodes/roots of
--- other trees.
---
--- TODO(perf): consider union-by-rank union find.
+-- Type representations for various stages of compiler, and union-find for
+-- inference.
 
 module Foglang.Types
-  ( TypeVarPtr (..),
+  ( TypeVar (..),
+    Terminal (..),
+    Constraint (..),
     UnresolvedType (..),
-    HeadResolvedType (..),
+    ForestRoot (..),
     ResolvedType (..),
 
-    intLitTypes,
-    floatLitTypes,
-    intLitDefault,
-    floatLitDefault,
-
-    Subst, -- intentionally not exporting ctor, must interact through helpers
+    SubstState,
     substEmpty,
     substFind,
-    substBind,
+    bindLink,
+    bindRoot,
+
+    isIntLitTerminal,
+    isFloatLitTerminal,
+    conDefault
   )
 where
 
@@ -63,118 +30,149 @@ import Text.Megaparsec.Pos (SourcePos)
 import Foglang.AST (Ident (..))
 
 -- ----------------------------------------------------------------------------
--- Type representations
+-- Parameterised building blocks
+--
+-- Parameterized by `t` so "shape" is reusable across Parse, Inference, Codegen.
+-- `t` will be an actual type, or pointer into union-find forest.
 
-newtype TypeVarPtr = TypeVarPtr Int
-  deriving (Eq, Show)
+-- | Terminal type: a fully-chosen type constructor.
+data Terminal t
+  = TNamed       Ident
+  | TSlice       t
+  | TMap         t t
+  | TFunc        [t] (Maybe t) t
+  | TUnit        -- ^ `()`
+  | TEmptyStruct -- ^ `struct{}`
+  | TAny         -- ^ any/interface{}
+  | TOpaque      -- ^ Fog type-system gap! Bypass fog type checking.
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
--- | Parse/inference-input type annotation on AST nodes.
--- Carries `SourcePos` of where it was minted.
+-- | Narrowing constraint.
+-- Will narrow to a `Terminal` if unification has enough information,
+-- or can narrow to its default `Terminal` value at resolve time.
+data Constraint t
+  = ConIntLit
+  | ConFloatLit
+  | ConIndexable t t
+  deriving (Eq, Show, Functor, Foldable, Traversable)
+
+-- ----------------------------------------------------------------------------
+-- Core types
+
+-- | Pointer into a unifying tree in the substitution forest.
+newtype TypeVar = TypeVar Int
+  deriving (Eq, Ord, Show)
+
+-- | A unresolved type. Terminal or constraint always from source code type
+-- annotation, or a fresh minted type var.
 data UnresolvedType
-  = UTyVar          SourcePos TypeVarPtr       -- ^ Pointer into the substitution forest.
-  | UTyHeadResolved SourcePos HeadResolvedType -- ^ Head resolved, may contain `UTyVar` children
+  = UTyVar        SourcePos TypeVar
+  | UTyTerminal   SourcePos (Terminal UnresolvedType)
+  | UTyConstraint SourcePos (Constraint UnresolvedType)
   deriving (Show)
 instance Eq UnresolvedType where -- Eq ignores SourcePos
-  UTyVar          _ tv1 == UTyVar          _ tv2 = tv1 == tv2
-  UTyHeadResolved _ rh1 == UTyHeadResolved _ rh2 = rh1 == rh2
-  _                     == _                     = False
+  UTyVar        _ a == UTyVar        _ b = a == b
+  UTyTerminal   _ a == UTyTerminal   _ b = a == b
+  UTyConstraint _ a == UTyConstraint _ b = a == b
+  _                 == _                 = False
 
--- | A WHNF type, used inside type inference as union find substitution forest roots.
--- Head is resolved, but children may still be `UTyVar`.
--- Either a terminal, or a constraint that may be narrowed later.
-data HeadResolvedType
-  = HRTerminal   TerminalType
-  | HRConstraint ConstraintType
-
--- Head resolved terminal type: unresolved children, can't narrow
-data TerminalType
-  = TyNamed       Ident
-  | TySlice       UnresolvedType
-  | TyMap         UnresolvedType UnresolvedType
-  | TyFunc        [UnresolvedType] (Maybe UnresolvedType) UnresolvedType
-  | TyUnit        -- ^ `()`
-  | TyEmptyStruct -- ^ `struct{}`
-  | TyAny         -- ^ any/interface{}
-  | TyOpaque      -- ^ Fog type-system gap! Bypass fog type checking.
-  deriving (Eq, Show)
-
--- Head resolved constraint type: unresolved children, can narrow
-data ConstraintType
-  = ConIntLit      -- ^ narrows to member of `intLitTypes`
-  | ConFloatLit    -- ^ narrows to member of `floatLitTypes`
-  | ConIndexable   UnresolvedType UnresolvedType -- ^ narrows to indexable instance (slice/map/string) when key shape is concrete
-  deriving (Eq, Show)
-
--- | Complete, concrete type, ready for codegen.
-data ResolvedType
-  = RTyNamed       Ident
-  | RTySlice       ResolvedType
-  | RTyMap         ResolvedType ResolvedType
-  | RTyFunc        [ResolvedType] (Maybe ResolvedType) ResolvedType
-  | RTyUnit
-  | RTyEmptyStruct
-  | RTyAny
-  | RTyOpaque
+-- | Complete, terminal type, ready for codegen. Fully materialized type tree.
+newtype ResolvedType = ResolvedType (Terminal ResolvedType)
   deriving (Eq, Show)
 
 -- ----------------------------------------------------------------------------
--- Numeric literals
+-- Substitution: union-find forest
 
--- | Named types an integer literal is allowed to unify with.
-intLitTypes :: Set.Set Ident
-intLitTypes = Set.fromList $ map Ident
-  ["int", "int8", "int16", "int32", "int64",
-   "uint", "uint8", "uint16", "uint32", "uint64",
-   "uintptr", "byte", "rune"]
-
--- | Named types a float literal is allowed to unify with.
-floatLitTypes :: Set.Set Ident
-floatLitTypes = Set.fromList $ map Ident ["float32", "float64"]
-
--- | Default ResolvedType an unresolved `ConIntLit` takes
-intLitDefault :: Ident
-intLitDefault = Ident "int"
-
--- | Default ResolvedType an unresolved `ConFloatLit` takes
-floatLitDefault :: Ident
-floatLitDefault = Ident "float64"
-
--- ----------------------------------------------------------------------------
--- Substitution: union find forest
-
--- | The substitution. Newtype over `IntMap` so that read/write must happen via
--- helpers.
-newtype Subst = Subst { unSubst :: IntMap.IntMap UnresolvedType }
+-- | Payload at the root of a substitution-forest unifying tree.
+-- Either a terminal or a constraint, with `TypeVar` children only.
+data ForestRoot
+  = FRTerminal   (Terminal TypeVar)
+  | FRConstraint (Constraint TypeVar)
   deriving (Show)
 
-substEmpty :: Subst
-substEmpty = Subst { unSubst = IntMap.empty }
+-- | A forest entry. `SourcePos` is the site where the entry was created
+-- (the `bindLink` / `bindRoot` call). For `FELink`, the pos stays stable
+-- under path compression - only the target `TypeVar` is rewritten.
+data ForestEntry
+  = FELink SourcePos TypeVar
+  | FERoot SourcePos ForestRoot
 
--- | Walk the substitution forest from `curPtr` to its tree root.
+-- | Substitution state: substitution forest plus next type var counter.
+data SubstState = SubstState
+  { forest       :: IntMap.IntMap ForestEntry,
+    sNextTypeVar :: Int
+  }
+
+substEmpty :: Int -> SubstState
+substEmpty nextTypeVar = SubstState { forest = IntMap.empty, sNextTypeVar = nextTypeVar }
+
+-- | Walk the substitution forest from `curId` to its tree root.
 -- Path-compresses on the way back: every link visited is rewritten to
--- point directly at the root.
+-- point directly at the root (keeping its original bind `SourcePos`).
 --
--- Returns (rootPtr, rootValue, updatedSubst):
---   * `rootPtr`      - id of the root reached.
+-- Returns (rootId, rootValue, updatedSubst):
+--   * `rootId`       - id of the root reached.
 --   * `rootValue`    - `Nothing` if the root is unbound (no entry in the map);
---                      `Just hr` if the root is bound to that head-resolved type.
---   * `updatedSubst` - updated subst with path compression applied.
-substFind :: TypeVarPtr -> Subst -> (TypeVarPtr, Maybe HeadResolvedType, Subst)
-substFind curPtr@(TypeVarPtr curPtrInt) subst =
-  case IntMap.lookup curPtrInt (unSubst subst) of
+--                      `Just (pos, r)` if bound, with `pos` the bind site.
+--   * `updatedSubst` - subst with path compression applied.
+substFind :: TypeVar -> SubstState -> (TypeVar, Maybe (SourcePos, ForestRoot), SubstState)
+substFind curId@(TypeVar curIdInt) subst =
+  case IntMap.lookup curIdInt (forest subst) of
     Nothing ->
-      -- curPtr has no entry (dangling); it is itself an (unbound) tree root.
-      (curPtr, Nothing, subst)
-    Just (UTyHeadResolved _ hr) ->
-      -- curPtr is the tree root, bound to hr.
-      (curPtr, Just hr, subst)
-    Just (UTyVar linkPos nxtPtr) ->
-      -- curPtr is a link in chain, chase rest of chain to root, then path compress by rewriting curPtr to point directly at root.
-      let (rootPtr, mRootHr, Subst subst') = substFind nxtPtr subst -- recursively path compresses along whole chain
-      in (rootPtr, mRootHr, Subst (IntMap.insert curPtrInt (UTyVar linkPos rootPtr) subst'))
-      -- end result: `A -> B -> C -> ROOT` becomes `A -> ROOT; B -> ROOT; C -> ROOT}
+      -- curId has no entry; it is itself an unbound root.
+      (curId, Nothing, subst)
+    Just (FERoot pos root) ->
+      -- cur is the tree root.
+      (curId, Just (pos, root), subst)
+    Just (FELink linkPos nxtPtr) ->
+      -- cur is a link in the chain; chase to the root, then path
+      -- compress by rewriting cur to point directly at the root but
+      -- preserving original SourcePos.
+      let (rootId, mRoot, subst') = substFind nxtPtr subst
+          compressed = subst' { forest = IntMap.insert curIdInt (FELink linkPos rootId) (forest subst') }
+      in (rootId, mRoot, compressed)
+      -- net effect: `A -> B -> C -> ROOT` becomes `A -> ROOT; B -> ROOT; C -> ROOT`.
 
--- Bind the TypeVarPtr n to an UnresolvedType. Forming either a UTyVar link or UTyHeadResolved head in the substitution forest.
-substBind :: TypeVarPtr -> UnresolvedType -> Subst -> Subst
-substBind (TypeVarPtr n) (UTyVar _ (TypeVarPtr m)) s | n == m = s -- self link is no-op
-substBind (TypeVarPtr n) t (Subst s) = Subst $ IntMap.insert n t s
+-- | Link `src` to `tgt`, making `src` a non-root entry that redirects to
+-- `tgt`'s tree. Self-link (`src == tgt`) is a no-op.
+bindLink :: SourcePos -> TypeVar -> TypeVar -> SubstState -> SubstState
+bindLink _   (TypeVar src) (TypeVar tgt) subst | src == tgt = subst
+bindLink pos (TypeVar src) (TypeVar tgt) subst =
+  subst { forest = IntMap.insert src (FELink pos (TypeVar tgt)) (forest subst) }
+
+-- | Bind `rootId` as a root with the given `ForestRoot` payload.
+bindRoot :: SourcePos -> TypeVar -> ForestRoot -> SubstState -> SubstState
+bindRoot pos (TypeVar rootId) root subst =
+  subst { forest = IntMap.insert rootId (FERoot pos root) (forest subst) }
+
+-- ----------------------------------------------------------------------------
+-- Constraint defaulting
+
+-- | Is this terminal a valid narrowing target for `ConIntLit`?
+isIntLitTerminal :: Terminal t -> Bool
+isIntLitTerminal (TNamed i) = i `Set.member` intLitIdents
+  where
+    intLitIdents = Set.fromList $ map Ident
+      ["int", "int8", "int16", "int32", "int64",
+      "uint", "uint8", "uint16", "uint32", "uint64",
+      "uintptr", "byte", "rune"]
+isIntLitTerminal _ = False
+
+-- | Is this terminal a valid narrowing target for `ConFloatLit`?
+isFloatLitTerminal :: Terminal t -> Bool
+isFloatLitTerminal (TNamed i) = i `Set.member` floatLitIdents
+  where
+    floatLitIdents = Set.fromList $ map Ident ["float32", "float64"]
+isFloatLitTerminal _ = False
+
+-- | Default a constraint to a concrete ResolvedType. Nothing if ambiguous.
+conDefault :: Constraint ResolvedType -> Maybe ResolvedType
+conDefault con = case con of
+  ConIntLit        -> Just (ResolvedType (TNamed (Ident "int")))
+  ConFloatLit      -> Just (ResolvedType (TNamed (Ident "float64")))
+  ConIndexable k v -> case k of
+    ResolvedType t | isIntLitTerminal t -> Just (ResolvedType (TSlice v))
+    ResolvedType (TNamed _) -> Just (ResolvedType (TMap k v))
+    ResolvedType TOpaque    -> Just (ResolvedType (TMap k v))
+    ResolvedType TAny       -> Just (ResolvedType (TMap k v))
+    _                       -> Nothing
