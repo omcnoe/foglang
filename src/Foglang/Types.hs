@@ -6,17 +6,19 @@
 
 module Foglang.Types
   ( TypeVar (..),
+    UnresolvedType (..),
+    ResolvedType (..),
     Terminal (..),
     Constraint (..),
-    UnresolvedType (..),
-    ForestRoot (..),
-    ResolvedType (..),
 
-    SubstState,
-    substEmpty,
+    ForestRoot (..),
+    ForestEntry (..),
+    Subst (..),
+    ResolutionSubst (..),
     substFind,
-    bindLink,
-    bindRoot,
+    substBindLink,
+    substBindRoot,
+    substResolve,
 
     isIntLitTerminal,
     isFloatLitTerminal,
@@ -28,6 +30,30 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Set qualified as Set
 import Text.Megaparsec.Pos (SourcePos)
 import Foglang.AST (Ident (..))
+
+-- ----------------------------------------------------------------------------
+-- Core types
+
+-- | Pointer into a unifying tree in the substitution forest.
+newtype TypeVar = TypeVar Int
+  deriving (Eq, Ord, Show)
+
+-- | An unresolved type. Terminal or constraint always from source code type
+-- annotation, or a fresh minted type var.
+data UnresolvedType
+  = UTyVar        SourcePos TypeVar
+  | UTyTerminal   SourcePos (Terminal UnresolvedType)
+  | UTyConstraint SourcePos (Constraint UnresolvedType)
+  deriving (Show)
+instance Eq UnresolvedType where -- Eq ignores SourcePos
+  UTyVar        _ a == UTyVar        _ b = a == b
+  UTyTerminal   _ a == UTyTerminal   _ b = a == b
+  UTyConstraint _ a == UTyConstraint _ b = a == b
+  _                 == _                 = False
+
+-- | Complete, terminal type, ready for codegen. Fully materialized type tree.
+newtype ResolvedType = ResolvedType (Terminal ResolvedType)
+  deriving (Eq, Show)
 
 -- ----------------------------------------------------------------------------
 -- Parameterised building blocks
@@ -57,54 +83,30 @@ data Constraint t
   deriving (Eq, Show, Functor, Foldable, Traversable)
 
 -- ----------------------------------------------------------------------------
--- Core types
-
--- | Pointer into a unifying tree in the substitution forest.
-newtype TypeVar = TypeVar Int
-  deriving (Eq, Ord, Show)
-
--- | A unresolved type. Terminal or constraint always from source code type
--- annotation, or a fresh minted type var.
-data UnresolvedType
-  = UTyVar        SourcePos TypeVar
-  | UTyTerminal   SourcePos (Terminal UnresolvedType)
-  | UTyConstraint SourcePos (Constraint UnresolvedType)
-  deriving (Show)
-instance Eq UnresolvedType where -- Eq ignores SourcePos
-  UTyVar        _ a == UTyVar        _ b = a == b
-  UTyTerminal   _ a == UTyTerminal   _ b = a == b
-  UTyConstraint _ a == UTyConstraint _ b = a == b
-  _                 == _                 = False
-
--- | Complete, terminal type, ready for codegen. Fully materialized type tree.
-newtype ResolvedType = ResolvedType (Terminal ResolvedType)
-  deriving (Eq, Show)
-
--- ----------------------------------------------------------------------------
 -- Substitution: union-find forest
 
--- | Payload at the root of a substitution-forest unifying tree.
--- Either a terminal or a constraint, with `TypeVar` children only.
+-- | Root payload of a substitution forest unifying tree.
 data ForestRoot
   = FRTerminal   (Terminal TypeVar)
   | FRConstraint (Constraint TypeVar)
   deriving (Show)
 
--- | A forest entry. `SourcePos` is the site where the entry was created
--- (the `bindLink` / `bindRoot` call). For `FELink`, the pos stays stable
--- under path compression - only the target `TypeVar` is rewritten.
+-- | Entry in the substitution forest.
 data ForestEntry
   = FELink SourcePos TypeVar
   | FERoot SourcePos ForestRoot
+  deriving (Show)
 
--- | Substitution state: substitution forest plus next type var counter.
-data SubstState = SubstState
-  { forest       :: IntMap.IntMap ForestEntry,
-    sNextTypeVar :: Int
-  }
+-- | Inference-phase substitution state: union-find forest plus fresh TypeVar counter.
+data Subst = Subst
+  { sForest      :: IntMap.IntMap ForestEntry,
+    sNextTypeVar :: Int }
+  deriving (Show)
 
-substEmpty :: Int -> SubstState
-substEmpty nextTypeVar = SubstState { forest = IntMap.empty, sNextTypeVar = nextTypeVar }
+-- | Resolution phase substitution state: forest including memoized resolved type values.
+data ResolutionSubst = ResolutionSubst
+  { rForest :: IntMap.IntMap (Either ForestEntry ResolvedType) }
+  deriving (Show)
 
 -- | Walk the substitution forest from `curId` to its tree root.
 -- Path-compresses on the way back: every link visited is rewritten to
@@ -115,9 +117,9 @@ substEmpty nextTypeVar = SubstState { forest = IntMap.empty, sNextTypeVar = next
 --   * `rootValue`    - `Nothing` if the root is unbound (no entry in the map);
 --                      `Just (pos, r)` if bound, with `pos` the bind site.
 --   * `updatedSubst` - subst with path compression applied.
-substFind :: TypeVar -> SubstState -> (TypeVar, Maybe (SourcePos, ForestRoot), SubstState)
+substFind :: TypeVar -> Subst -> (TypeVar, Maybe (SourcePos, ForestRoot), Subst)
 substFind curId@(TypeVar curIdInt) subst =
-  case IntMap.lookup curIdInt (forest subst) of
+  case IntMap.lookup curIdInt subst.sForest of
     Nothing ->
       -- curId has no entry; it is itself an unbound root.
       (curId, Nothing, subst)
@@ -129,21 +131,29 @@ substFind curId@(TypeVar curIdInt) subst =
       -- compress by rewriting cur to point directly at the root but
       -- preserving original SourcePos.
       let (rootId, mRoot, subst') = substFind nxtPtr subst
-          compressed = subst' { forest = IntMap.insert curIdInt (FELink linkPos rootId) (forest subst') }
+          compressed = subst' { sForest = IntMap.insert curIdInt (FELink linkPos rootId) subst'.sForest }
       in (rootId, mRoot, compressed)
       -- net effect: `A -> B -> C -> ROOT` becomes `A -> ROOT; B -> ROOT; C -> ROOT`.
 
 -- | Link `src` to `tgt`, making `src` a non-root entry that redirects to
 -- `tgt`'s tree. Self-link (`src == tgt`) is a no-op.
-bindLink :: SourcePos -> TypeVar -> TypeVar -> SubstState -> SubstState
-bindLink _   (TypeVar src) (TypeVar tgt) subst | src == tgt = subst
-bindLink pos (TypeVar src) (TypeVar tgt) subst =
-  subst { forest = IntMap.insert src (FELink pos (TypeVar tgt)) (forest subst) }
+substBindLink :: SourcePos -> TypeVar -> TypeVar -> Subst -> Subst
+substBindLink _   (TypeVar src) (TypeVar tgt) subst | src == tgt = subst
+substBindLink pos (TypeVar src) (TypeVar tgt) subst =
+  subst { sForest = IntMap.insert src (FELink pos (TypeVar tgt)) subst.sForest }
 
 -- | Bind `rootId` as a root with the given `ForestRoot` payload.
-bindRoot :: SourcePos -> TypeVar -> ForestRoot -> SubstState -> SubstState
-bindRoot pos (TypeVar rootId) root subst =
-  subst { forest = IntMap.insert rootId (FERoot pos root) (forest subst) }
+substBindRoot :: SourcePos -> TypeVar -> ForestRoot -> Subst -> Subst
+substBindRoot pos (TypeVar rootId) root subst =
+  subst { sForest = IntMap.insert rootId (FERoot pos root) subst.sForest }
+
+-- | Walk the resolution forest from the given `TypeVar` to its root, resolving
+-- and memoizing intermediate roots on the way back up (path-compression-style).
+-- Returns `Nothing` if a root on the path is unbound or otherwise unresolvable.
+-- TODO impl (later)
+-- TODO needs to cycle detect, need expanded return type?
+substResolve :: TypeVar -> ResolutionSubst -> (Maybe ResolvedType, ResolutionSubst)
+substResolve = undefined
 
 -- ----------------------------------------------------------------------------
 -- Constraint defaulting
